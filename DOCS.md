@@ -118,6 +118,7 @@ Small models degrade as the window fills: they lose the request in the middle of
 | Stable prompt prefix | The system prompt no longer changes from turn to turn. Ollama reuses its KV cache for an unchanged prefix, so long sessions aren't re-read from scratch every turn. |
 | Repeat-call guard | An identical tool call with nothing changed since (no writes or commands in between) gets "you already have this result" instead of being run again. Two rounds of nothing but repeats end the turn. |
 | Step budget | Near `max_steps` the model is told to wrap up with its best answer instead of being cut off mid-task. |
+| Loop guard | Reasoning that repeats itself (the same passage, or the same thought coming back) or runs past `think_budget` is cut off. The step is then asked again with reasoning off and a nudge to answer directly. A reply that starts repeating is stopped and trimmed to one copy. |
 | Structured compaction | At 80% full, older history becomes a summary under fixed headings (Goal, Done, Facts, Open), seeded with the plan and pins. The exact paths of files touched are appended, so they're never lost. `/compact <focus>` says what must survive. |
 | Fresh contexts | `delegate` hands self-contained tasks to sub-agents that start empty and return only their answer. |
 
@@ -263,6 +264,9 @@ Load with `/tools mcp:fs`, or let the model call `load_tools("mcp:fs")`. Tools f
 | `vision_model` | "" | Model used for images when the current one can't see. Empty means pick an installed one. |
 | `search.searxng_url` | "" | Use your SearXNG instance instead of DuckDuckGo. |
 | `shell` | "" | e.g. `powershell` or `/bin/zsh`. |
+| `think_budget` | auto | Tokens of reasoning per step before it's cut short. `auto` is 8000, or 2000 / 6000 / 16000 with `/think low|medium|high`. `0` turns the limit off. |
+| `repeat_penalty` | null | For example `1.1` if a model keeps repeating itself. `null` keeps the model's default. |
+| `max_output_tokens` | 0 | Cap on one reply (Ollama's `num_predict`). lotus warns when a reply hits it. |
 | `theme` | auto | `auto` follows the terminal background; `dark` or `light` forces one. |
 | `browser.allow` / `browser.block` | [] | Sites the browser may (or may never) open, e.g. `["wikipedia.org"]`. Subdomains count. |
 | `browser.confirm_risky` | true | Ask before clicking buy / send / delete / submit-like buttons. |

@@ -28,7 +28,7 @@ from .config import home
 from .context import Context
 from .ollama import OllamaError
 from .render import StreamRenderer, SubUI
-from .textcalls import TEXT_PROTOCOL, Splitter, extract_calls
+from .textcalls import TEXT_PROTOCOL, LoopGuard, Splitter, extract_calls
 from .theme import ASCII, COMPACT_WORD, G, c
 
 MASKED = "…[old tool output trimmed to save context; run the tool again if you need it]"
@@ -165,6 +165,82 @@ class Agent:
         est = self.ctx.messages(msgs) + (self.ctx.chars(len(json.dumps(tools))) if tools else 0)
         return msgs, tools, est
 
+    def _think_budget(self):
+        """Tokens of reasoning allowed per step before it's cut short (0: no limit)."""
+        b = self.cfg.get("think_budget", "auto")
+        if b in (None, "auto", ""):
+            b = {"low": 2000, "medium": 6000, "high": 16000}.get(self.think, 8000)
+        try:
+            return max(0, int(b))
+        except (TypeError, ValueError):
+            return 0
+
+    def _stream(self, msgs, tools, opts, think, rend, budget_scale=1.0):
+        """One streamed model call, watched for loops. Returns what came back and why it stopped."""
+        split = Splitter()
+        g_think, g_text = LoopGuard(reps=3), LoopGuard(reps=5, near=False, min_span=800)
+        tokens = int(self._think_budget() * budget_scale)
+        budget = int(tokens * self.ctx.ratio)  # reasoning is measured in characters as it streams
+        out = {"split": split, "calls": [], "final": {}, "interrupted": False, "loop": None, "why": "", "guard": g_text}
+
+        def thought(txt):
+            self.ui.think(txt)
+            why = g_think.feed(txt)
+            if not why and budget and g_think.total > budget:
+                why = f"ran past its budget of ~{tokens} tokens (think_budget in config)"
+            if why:
+                out["loop"], out["why"] = "think", why
+            return why
+
+        def show(parts):
+            for kind, txt in parts:
+                if kind == "text":
+                    if not txt.strip() and rend is None and not self.ui.plain:
+                        continue
+                    self.ui.think_end()
+                    if rend:
+                        rend.feed(txt)
+                    elif not self.quiet:
+                        self.ui.write(txt)
+                    why = g_text.feed(txt)
+                    if why:
+                        out["loop"], out["why"] = "text", why
+                        return True
+                elif kind == "think" and thought(txt):
+                    return True
+            return False
+
+        if not self.quiet:
+            self.ui.wait()
+        stream = None
+        try:
+            stream = self.client.chat(self.model, msgs, tools=tools, options=opts, think=think,
+                                      keep_alive=self.cfg.get("keep_alive"))
+            for ch in stream:
+                if self.cancel.is_set():
+                    out["interrupted"] = True
+                    break
+                m = ch.get("message") or {}
+                if m.get("thinking") and thought(m["thinking"]):
+                    break
+                if m.get("content") and show(split.feed(m["content"])):
+                    break
+                if m.get("tool_calls"):
+                    out["calls"].extend(m["tool_calls"])
+                if ch.get("done"):
+                    out["final"] = ch
+        except KeyboardInterrupt:
+            out["interrupted"] = True
+        finally:
+            # closing the HTTP stream tells Ollama to stop generating right away
+            if stream is not None and hasattr(stream, "close"):
+                with contextlib.suppress(Exception):
+                    stream.close()
+        if out["loop"] != "think":
+            show(split.flush())
+        self.ui.think_end()
+        return out
+
     def _complete(self):
         msgs, tools, est = self._prepare()
         reserve = self.cfg["reserve_tokens"]
@@ -182,58 +258,36 @@ class Agent:
         opts = {"num_ctx": num_ctx}
         if self.cfg.get("temperature") is not None:
             opts["temperature"] = self.cfg["temperature"]
+        if self.cfg.get("max_output_tokens"):
+            opts["num_predict"] = int(self.cfg["max_output_tokens"])
+        if self.cfg.get("repeat_penalty") is not None:
+            opts["repeat_penalty"] = float(self.cfg["repeat_penalty"])
 
-        split = Splitter()
         rend = None if (self.quiet or self.ui.plain) else StreamRenderer(self.ui)
-        calls, final, interrupted, saw_native_thinking = [], {}, False, False
-
-        def show(parts):
-            for kind, txt in parts:
-                if kind == "text":
-                    if not txt.strip() and rend is None and not self.ui.plain:
-                        continue
-                    self.ui.think_end()
-                    if rend:
-                        rend.feed(txt)
-                    elif not self.quiet:
-                        self.ui.write(txt)
-                elif kind == "think":
-                    self.ui.think(txt)
-
-        if not self.quiet:
-            self.ui.wait()
-        stream = None
-        try:
-            stream = self.client.chat(self.model, msgs, tools=tools, options=opts, think=self._think_param(),
-                                      keep_alive=self.cfg.get("keep_alive"))
-            for ch in stream:
-                if self.cancel.is_set():
-                    interrupted = True
-                    break
-                m = ch.get("message") or {}
-                if m.get("thinking"):
-                    saw_native_thinking = True
-                    self.ui.think(m["thinking"])
-                if m.get("content"):
-                    show(split.feed(m["content"]))
-                if m.get("tool_calls"):
-                    calls.extend(m["tool_calls"])
-                if ch.get("done"):
-                    final = ch
-        except KeyboardInterrupt:
-            interrupted = True
-        finally:
-            # closing the HTTP stream tells Ollama to stop generating right away
-            if stream is not None and hasattr(stream, "close"):
-                with contextlib.suppress(Exception):
-                    stream.close()
-        show(split.flush())
+        think = self._think_param()
+        r = self._stream(msgs, tools, opts, think, rend)
+        if r["loop"] == "think" and not r["interrupted"]:
+            # Reasoning went round in circles (or ran past its budget). Ask once more, without
+            # reasoning where the model allows it, and with a nudge to answer now.
+            self.ui.warn(f"its reasoning {r['why']}; asking for the answer directly")
+            nudge = "\n\n(Stop deliberating. Answer now, directly, with your best answer or the next tool call.)"
+            retry = msgs[:-1] + [dict(msgs[-1], content=(msgs[-1].get("content") or "") + nudge)]
+            r = self._stream(retry, tools, opts, False if "thinking" in self.caps else think, rend, budget_scale=0.5)
+            if r["loop"] == "think":
+                self.ui.warn(f"its reasoning {r['why']} again; stopping this step")
+        elif r["loop"] == "text":
+            self.ui.warn(f"the reply {r['why']}; cut it off there")
         if rend:
             rend.close()
         self.ui.think_end()
         self.ui.status(None)
+        split, calls, final, interrupted = r["split"], r["calls"], r["final"], r["interrupted"]
+        if final.get("done_reason") == "length":
+            self.ui.warn("the reply hit the output limit (max_output_tokens) and was cut short")
 
         text = split.stored()
+        if r["loop"] == "text":
+            text = r["guard"].trim(text)
         norm, from_text = [], False
         for tc in calls:
             fn = tc.get("function") or {}
@@ -242,7 +296,7 @@ class Agent:
                 from .textcalls import repair_json
                 args = repair_json(args) or {}
             norm.append({"name": fn.get("name", ""), "args": args})
-        if not norm and not interrupted:
+        if not norm and not interrupted and r["loop"] != "think":
             norm = extract_calls(text, set(T.TOOLS))
             from_text = bool(norm)
 

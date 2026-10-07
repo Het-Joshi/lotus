@@ -19,6 +19,9 @@ DEFAULTS = {
     "reserve_tokens": 2048,       # room kept free for the reply
     "tool_output_share": 0.2,     # max share of the window one tool result may take
     "max_steps": 15,
+    "think_budget": "auto",       # tokens of reasoning per step before it's cut short; auto scales with /think, 0 = no limit
+    "max_output_tokens": 0,       # cap on one reply (Ollama num_predict); 0 = the model's default
+    "repeat_penalty": None,       # e.g. 1.1 if a model keeps repeating itself; None = the model's default
     "temperature": None,
     "keep_alive": "30m",
     "shell": "",                  # e.g. "powershell" or "/bin/zsh"; empty = system default

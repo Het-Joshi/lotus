@@ -140,3 +140,68 @@ class Splitter:
 
     def stored(self):
         return "".join(self.kept).strip()
+
+
+class LoopGuard:
+    """Notices a model going round in circles while it streams.
+
+    Small models, reasoning ones especially, sometimes fall into a loop: the same passage
+    over and over, or the same few sentences ("Wait, but the user said...") with small
+    variations. Two checks over the recent text:
+    - exact: the text ends in a passage of 50+ characters repeated `reps` times in a row,
+      covering at least `min_span` characters
+    - near (reasoning only): one sentence of 30+ characters seen 4+ times
+    Both are cheap, and only run every ~120 characters."""
+
+    def __init__(self, reps=4, near=True, window=8000, min_span=240):
+        self.reps, self.near, self.window, self.min_span = reps, near, window, min_span
+        self.period = 0
+        self.text, self.total, self._since = "", 0, 0
+
+    def feed(self, s):
+        """Add streamed text; returns a reason string when it's looping, else None."""
+        if not s:
+            return None
+        self.text = (self.text + s)[-self.window:]
+        self.total += len(s)
+        self._since += len(s)
+        if self._since < 120:
+            return None
+        self._since = 0
+        return self._exact() or (self._sentences() if self.near else None)
+
+    def _exact(self):
+        t, n = self.text, len(self.text)
+        for p in range(50, min(800, n // self.reps) + 1):
+            tail = t[n - p:]
+            if len(set(tail.strip())) <= 4:  # rules, dots, whitespace: not a thought
+                continue
+            if p * self.reps < self.min_span:
+                continue
+            if all(t[n - (k + 1) * p:n - k * p] == tail for k in range(1, self.reps)):
+                self.period = p
+                return f"repeated the same passage {self.reps} times"
+        return None
+
+    def _sentences(self):
+        seen = {}
+        for s in re.split(r"(?<=[.!?])\s+|\n+", self.text):
+            key = " ".join(s.lower().split())
+            if len(key) >= 30:
+                seen[key] = seen.get(key, 0) + 1
+                if seen[key] >= 4:
+                    return "kept coming back to the same thought"
+        return None
+
+    def trim(self, text):
+        """Cut text back to one copy of the repeated passage, from where the repeating began."""
+        p = self.period
+        if not p or len(text) < 2 * p:
+            return text
+        unit = text[-p:]
+        p = next((q for q in range(1, p) if p % q == 0 and unit == unit[:q] * (p // q)), p)  # smallest repeating unit
+        j = len(text) - p - 1
+        while j >= 0 and text[j] == text[j + p]:
+            j -= 1
+        start = j + 1
+        return text[:start + p].rstrip() if len(text) - start >= 2 * p else text

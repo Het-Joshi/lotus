@@ -27,7 +27,14 @@ DEFAULTS = {
     "shell": "",                  # e.g. "powershell" or "/bin/zsh"; empty = system default
     "subagents": {"parallel": 2, "max_steps": 8},
     "search": {"engine": "duckduckgo", "searxng_url": ""},
-    "tor": {"enabled": False, "proxy": "socks5h://127.0.0.1:9050"},
+    "tor": {"enabled": False, "proxy": "socks5h://127.0.0.1:9050"},  # also routes the browser when on
+    "safe_browsing": {
+        "enabled": True,          # check pages against malware and phishing lists before they load
+        "lists": ["urlhaus", "openphish"],  # add "phishing-database" for ~400k more phishing domains (11 MB)
+        "google_api_key": "",     # optional: also ask Google Safe Browsing
+        "allow_executables": False,  # let the browser download programs and scripts
+        "ignore": [],             # sites to never flag, e.g. ["my-test-site.dev"]
+    },
     "browser": {
         "headless": None,         # None: a window when there's a display, headless otherwise
         "cdp_url": "",            # e.g. http://localhost:9222 to drive your own Chrome

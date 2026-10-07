@@ -148,7 +148,7 @@ stopping it only affects local testing.
   <h2>What's in it</h2>
   <dl>
     <dt>Tools</dt><dd>Files, shell, grep, web search and fetch (optionally over Tor), clipboard, apps, notifications, charts and tables in the terminal, sub-agents with a fresh context.</dd>
-    <dt>Browser</dt><dd>Pages become text plus numbered elements, so a small model can say <code>browser_click("3")</code>. Asks before buy, send or delete buttons; site allow and block lists; tabs, dialogs and downloads handled.</dd>
+    <dt>Browser</dt><dd>Pages become text plus numbered elements, so a small model can say <code>browser_click("3")</code>. Asks before buy, send or delete buttons. Known malware and phishing pages are blocked, pages that try to give it orders are flagged, passwords and card numbers always need your yes. Goes through Tor with <code>/tor on</code>, <code>.onion</code> included.</dd>
     <dt>Control</dt><dd><kbd>Esc</kbd> stops a turn anywhere: the reply, a running command, the browser, sub-agents. Type while it works and your message is queued. Commands, writes and form input ask first.</dd>
     <dt>Memory</dt><dd><code>LOTUS.md</code> keeps instructions and facts for each project. <code>.LOTUS_REM.txt</code> notes where the last session left off, so the next one picks up there.</dd>
     <dt>Extending</dt><dd>MCP servers, Python plugins (a function and a docstring is a tool), and recipes: saved prompts you can run on a schedule.</dd>

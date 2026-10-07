@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, automation, mcp, memory, plugins, theme
+from . import __version__, automation, mcp, memory, plugins, safety, theme
 from . import tools as T
 from .agent import Agent
 from .config import home, load as load_cfg, save as save_cfg
@@ -796,7 +796,9 @@ def cmd_browser(arg, cfg, ui):
     if d is None:
         bc = cfg.get("browser", {})
         where = f"your Chrome at {bc['cdp_url']}" if bc.get("cdp_url") else ("headless" if bc.get("headless") else "a window (headless without a display)")
-        ui.info(f"the browser isn't running; it opens on first use, in {where}. /tools browser lets the model drive it")
+        ui.info(f"the browser isn't running; it opens on first use, in {where}"
+                + (", behind Tor" if cfg["tor"].get("enabled") else "") + ". /tools browser lets the model drive it")
+        ui.block([c("  safe browsing  " + r, "mist") for r in safety.status(cfg)])
         return
     mode, rows = d
     out = ["  " + c(f"{G['web']} browser", "petal", bold=True) + c(f"  {mode}", "mist")]
@@ -806,6 +808,7 @@ def cmd_browser(arg, cfg, ui):
     bc = cfg.get("browser", {})
     if bc.get("allow") or bc.get("block"):
         out.append(c(f"  allow: {', '.join(bc.get('allow') or ['anything'])}   block: {', '.join(bc.get('block') or ['nothing'])}", "mist"))
+    out += [c("  safe browsing  " + r, "mist") for r in safety.status(cfg)]
     ui.block(out)
 
 
@@ -855,6 +858,7 @@ def repl(agent, client, cfg, ui):
     ui.meta(c("  type / for commands, @ to attach files, ! to run a shell command; esc stops lotus while it works", "mist"))
     if plugins.ERRORS:
         ui.warn(f"{len(plugins.ERRORS)} plugin(s) failed to load; /plugins for details")
+    safety.warm(cfg)  # fetch the threat lists in the background, if they're missing or stale
     pc = cfg.get("project") or {}
     agent.keep_rem = pc.get("rem", True)
     notes = memory.note_items(agent.root)
@@ -966,6 +970,9 @@ def doctor(cfg, ui, client=None):
         rows.append(["playwright", "installed"])
     except ImportError:
         rows.append(["playwright", "missing: pip install playwright && python -m playwright install chromium"])
+    sb = safety._cfg(cfg)
+    rows.append(["safe browsing", ("on: " + ", ".join(sb["lists"]) + (" + Google" if sb.get("google_api_key") else ""))
+                 if sb["enabled"] else "off"])
     rows.append(["theme", f"{theme.MODE} ({theme.PREF}, from {theme.SOURCE})"])
     rows.append(["config", str(home() / "config.json")])
     rows.append(["plugins", f"{len(plugins.LOADED)} loaded, {len(plugins.ERRORS)} failed"])

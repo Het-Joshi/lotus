@@ -10,6 +10,7 @@ import urllib.request
 from html.parser import HTMLParser
 
 from . import pack, tool
+from .. import safety
 
 pack("web", "search the web and read pages (Tor optional)")
 
@@ -110,16 +111,24 @@ def fetch_url(url: str, offset: int = 0, via_tor: bool = False, _ctx=None):
     offset: character offset for long pages
     via_tor: route this request through Tor"""
     if not re.match(r"^https?://", url):
-        url = "https://" + url
+        if "://" in url or re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d)", url):
+            return "error: only http and https addresses can be fetched"
+        url = safety.with_scheme(url)
+    why = safety.check_url(url, _ctx.cfg)
+    if why and not _ctx.approve("fetch_url", f"{url}\nThis address is listed as {why}.", key="fetch_url:unsafe", force=True):
+        return f"error: {urllib.parse.urlparse(url).hostname} is listed as {why}; it was not fetched. Tell the user."
     tor, proxy = _tor(_ctx, via_tor)
     raw = http(url, tor, proxy)
     if raw.lstrip().startswith(("{", "[")):
-        return raw[offset:offset + 8000]
+        warn = safety.guard_text(raw[:20000])
+        return (warn + "\n" if warn else "") + raw[offset:offset + 8000]
     title, text, links = page_text(raw, url)
     chunk = text[offset:offset + 7000]
     more = f"\n[chars {offset}-{offset + len(chunk)} of {len(text)}; call again with offset={offset + len(chunk)} for more]" if offset + len(chunk) < len(text) else ""
     linkpart = "\n\nLinks:\n" + "\n".join(f"[{i + 1}] {l}" for i, l in enumerate(links[:40])) if links else ""
-    return f"# {title or url}\n{url}{' (via Tor)' if tor else ''}\n\n{chunk}{more}{linkpart}"
+    warn = safety.guard_text(text)
+    head = safety.UNTRUSTED + ("\n" + warn if warn else "")
+    return f"# {title or url}\n{url}{' (via Tor)' if tor else ''}\n\n{head}\n{chunk}{more}{linkpart}"
 
 
 def _strip(s):
@@ -165,7 +174,12 @@ def web_search(query: str, n: int = 6, via_tor: bool = False, _ctx=None):
         results = _ddg(query, n, tor, proxy)
     if not results:
         return "no results"
-    return "\n".join(f"{i + 1}. {t}\n   {u}\n   {s[:220]}" for i, (t, u, s) in enumerate(results))
+    rows = []
+    for i, (t, u, snip) in enumerate(results):
+        why = safety.check_url(u, _ctx.cfg) if u.startswith("http") else None
+        flag = f"   WARNING: listed as {why}; don't open it\n" if why else ""
+        rows.append(f"{i + 1}. {t}\n   {u}\n{flag}   {snip[:220]}")
+    return "\n".join(rows)
 
 
 def tor_reachable(proxy):

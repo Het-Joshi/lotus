@@ -13,9 +13,15 @@ Control:
   (unless permission is auto). browser.allow / browser.block limit which sites it may open.
 - Dialogs are handled (alerts accepted, confirms dismissed and reported), popups become the
   current tab, downloads are saved to ~/.lotus/downloads.
-- After an action, the page text is only resent if it changed, which keeps small contexts small."""
+- After an action, the page text is only resent if it changed, which keeps small contexts small.
+- Safe browsing (see safety.py): known malware and phishing pages are blocked before they
+  load, page text is marked as untrusted and checked for prompt injection, passwords and
+  card numbers always need approval, and programs are never downloaded.
+- Tor: with /tor on (or for any .onion address) Chromium is relaunched behind the Tor SOCKS
+  proxy, with DNS resolved inside Tor, WebRTC kept off the network and QUIC disabled."""
 import atexit
 import concurrent.futures
+import contextlib
 import fnmatch
 import os
 import queue
@@ -26,6 +32,7 @@ import time
 from urllib.parse import urlparse
 
 from . import Interrupted, pack, tool
+from .. import safety
 from ..config import home
 
 pack("browser", "drive a real web browser: open, read, click, type, tabs, screenshot")
@@ -41,7 +48,7 @@ SNAP_JS = r"""
   document.querySelectorAll('[data-lotus]').forEach(e => e.removeAttribute('data-lotus'));
   const sel = 'a[href],button,input:not([type=hidden]),textarea,select,summary,[onclick],[contenteditable=""],[contenteditable=true],' +
     '[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=radio],[role=switch],[role=option],[role=combobox],[role=textbox]';
-  const vh = innerHeight, out = [], labels = {};
+  const vh = innerHeight, out = [], labels = {}, secret = [];
   let n = 0, more = 0;
   for (const e of document.querySelectorAll(sel)) {
     const r = e.getBoundingClientRect(), st = getComputedStyle(e);
@@ -70,6 +77,12 @@ SNAP_JS = r"""
     if (e.getAttribute('aria-checked') === 'true' || e.getAttribute('aria-selected') === 'true') bits.push('selected');
     const ex = e.getAttribute('aria-expanded'); if (ex) bits.push(ex === 'true' ? 'expanded' : 'collapsed');
     if (e.disabled || e.getAttribute('aria-disabled') === 'true') bits.push('disabled');
+    const ac = (e.getAttribute('autocomplete') || '').toLowerCase();
+    const ident = ((e.name || '') + ' ' + (e.id || '') + ' ' + label).toLowerCase();
+    if (field && (e.type === 'password' || ac.startsWith('cc-') || ac.includes('password') || ac === 'one-time-code' ||
+        /card.?number|cvv|cvc|security code|expir|iban|routing|account number|ssn|social security|\bpin\b|passcode/.test(ident))) {
+      bits.push('sensitive'); secret.push(n);
+    }
     if (r.top > vh || r.bottom < 0) bits.push('offscreen');
     if (tag === 'a') { try { const u = new URL(e.href); label += '  -> ' + (u.host === location.host ? '' : u.host) + u.pathname.slice(0, 50); } catch (x) {} }
     labels[n] = kind + ' ' + label;
@@ -79,7 +92,7 @@ SNAP_JS = r"""
   const useMain = main && main.innerText.trim().length > 400;
   let text = ((useMain ? main : body) || {innerText: ''}).innerText.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   const sh = Math.max(document.documentElement.scrollHeight, body ? body.scrollHeight : 0);
-  return {title: document.title, url: location.href, elements: out, labels, text: text.slice(0, opts.chars), total: text.length,
+  return {title: document.title, url: location.href, elements: out, labels, secret, text: text.slice(0, opts.chars), total: text.length,
           main: !!useMain, more, scroll: sh > vh ? Math.round(100 * scrollY / Math.max(1, sh - vh)) : 100,
           screens: Math.max(1, Math.round(sh / vh * 10) / 10)};
 }
@@ -192,8 +205,23 @@ def _shutdown():
 
 # ── state (browser thread) ───────────────────────────────────────────────────
 
-def _bc(ctx):
-    return (ctx.cfg.get("browser") or {}) if ctx is not None else {}
+SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d)")  # "javascript:x", but not "localhost:3000"
+
+_TRUSTED = set()  # hosts the user chose to open despite a safe-browsing warning (this session)
+
+
+def _onion(url):
+    return (urlparse(url).hostname or "").endswith(".onion")
+
+
+def _bc(ctx, url=None):
+    """Browser settings for one call, plus whether it must run behind Tor: /tor on, an
+    .onion address, or a session that already visited one (it stays on Tor until closed)."""
+    bc = dict((ctx.cfg.get("browser") or {}) if ctx is not None else {})
+    want = ctx is not None and (getattr(ctx, "tor", False) or (url and _onion(url)) or (_S.get("onion") and _S.get("tor")))
+    bc["_tor"] = _proxy(ctx) if want else None
+    bc["_cfg"] = ctx.cfg if ctx is not None else {}
+    return bc
 
 
 def _host_ok(url, bc):
@@ -231,7 +259,14 @@ def _wire(page, bc):
     page.on("download", lambda d: _S.setdefault("downloads", []).append(d))
 
 
+def _proxy(ctx):
+    """socks5://host:port for Chromium, from tor.proxy (Chromium resolves names through a SOCKS5 proxy)."""
+    hp = ctx.cfg["tor"]["proxy"].split("://")[-1]
+    return "socks5://" + hp
+
+
 def _launch(bc):
+    tor, cfg = bc.get("_tor"), bc.get("_cfg")
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -239,6 +274,11 @@ def _launch(bc):
     pw = sync_playwright().start()
     _S["pw"] = pw
     if bc.get("cdp_url"):
+        if tor:
+            pw.stop()
+            _S.clear()
+            raise RuntimeError("Tor can't be applied to your own Chrome (browser.cdp_url); start that Chrome with "
+                               f"--proxy-server={tor}, or clear cdp_url to let lotus launch a Tor-routed browser")
         b = pw.chromium.connect_over_cdp(bc["cdp_url"])
         context = b.contexts[0] if b.contexts else b.new_context()
         _S.update(cdp=True, mode=f"your Chrome at {bc['cdp_url']}")
@@ -246,19 +286,39 @@ def _launch(bc):
         headless = bc.get("headless")
         if headless is None:
             headless = sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-        kw = {"headless": headless}
+        kw = {"headless": headless, "args": []}
         if bc.get("channel"):
             kw["channel"] = bc["channel"]  # "chrome" or "msedge" to use an installed browser
+        ctx_kw = {"viewport": {"width": 1280, "height": 900}, "accept_downloads": True}
+        if tor:
+            kw["proxy"] = {"server": tor}
+            proxy_host = tor.split("://")[-1].rsplit(":", 1)[0]
+            kw["args"] += [
+                # no DNS outside the proxy; only the proxy itself is reached directly
+                f"--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE {proxy_host} , EXCLUDE localhost",
+                "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",  # WebRTC can't reveal your IP
+                "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+                "--disable-quic", "--dns-prefetch-disable", "--no-pings",
+            ]
+            ctx_kw.update(locale="en-US", timezone_id="UTC")  # like Tor Browser: don't give away where you are
         b = pw.chromium.launch(**kw)
-        context = b.new_context(viewport={"width": 1280, "height": 900}, accept_downloads=True)
-        _S.update(cdp=False, mode="headless" if headless else "window")
-    _S.update(browser=b, context=context, headless=_S["mode"] == "headless", bc=bc)
-    if bc.get("allow") or bc.get("block"):
+        context = b.new_context(**ctx_kw)
+        _S.update(cdp=False, mode=("headless" if headless else "window") + (" via Tor" if tor else ""))
+    _S.update(browser=b, context=context, headless=_S["mode"].startswith("headless"), bc=bc, tor=tor, cfg=cfg)
+    sb_on = safety._cfg(cfg)["enabled"]
+    if bc.get("allow") or bc.get("block") or sb_on:
         def guard(route):
             req = route.request
-            if req.is_navigation_request() and not _host_ok(req.url, bc):
-                _event(f"blocked navigation to {urlparse(req.url).hostname} (not allowed by browser.allow / browser.block)")
-                return route.abort("blockedbyclient")
+            if req.is_navigation_request():
+                host = urlparse(req.url).hostname
+                if not _host_ok(req.url, bc):
+                    _event(f"blocked navigation to {host} (not allowed by browser.allow / browser.block)")
+                    return route.abort("blockedbyclient")
+                why = safety.check_url(req.url, cfg, trusted=_TRUSTED) if sb_on else None
+                if why:
+                    _event(f"blocked {req.url[:100]}: it is listed as {why}. Tell the user; they can open it "
+                           "deliberately with browser_open if they're sure")
+                    return route.abort("blockedbyclient")
             return route.continue_()
         context.route("**/*", guard)
 
@@ -290,6 +350,11 @@ def _pages():
 
 
 def _page(bc):
+    tor = bc.get("_tor")
+    if _S.get("context") and "_tor" in bc and _S.get("tor") != tor:
+        # switching Tor on or off means a different browser: restart it, cleanly
+        _stop()
+        _event("the browser restarted " + ("behind Tor" if tor else "without Tor") + "; earlier tabs were closed")
     if not _S.get("context"):
         _launch(bc)
     pg = _S.get("page")
@@ -318,6 +383,13 @@ def _settle(pg, quick=False):
 def _save_downloads():
     d = home() / "downloads"
     for dl in _S.pop("downloads", []):
+        name = dl.suggested_filename
+        if safety.is_executable(name) and not safety._cfg(_S.get("cfg")).get("allow_executables"):
+            with contextlib.suppress(Exception):
+                dl.cancel()
+                dl.delete()
+            _event(f"refused to download {name}: programs and scripts aren't downloaded (safe_browsing.allow_executables)")
+            continue
         try:
             d.mkdir(exist_ok=True)
             path = d / dl.suggested_filename
@@ -338,15 +410,19 @@ def _snapshot(bc, full=True):
         d = pg.evaluate(SNAP_JS, opts)
         full = True
     _S["labels"] = d["labels"]
+    _S["secret"] = {str(n) for n in d.get("secret", [])}
     key = (d["url"], hash(d["text"]))
     same = _S.get("last") == key
     _S["last"] = key
     pages = _pages()
-    head = f"# {d['title'] or '(untitled)'}\n{d['url']}"
+    head = f"# {d['title'] or '(untitled)'}\n{d['url']}" + ("  (via Tor)" if _S.get("tor") else "")
     if len(pages) > 1 and pg in pages:
         head += f"   [tab {pages.index(pg) + 1} of {len(pages)}]"
     out = [head]
     events = _S.pop("events", [])
+    u = urlparse(d["url"])
+    if u.scheme == "http" and not (u.hostname or "").endswith(".onion") and u.hostname not in ("localhost", "127.0.0.1"):
+        events.append("this page isn't encrypted (http); don't enter anything private here")
     if events:
         out.append("\n".join("Note: " + e for e in events))
     if same and not full:
@@ -355,7 +431,8 @@ def _snapshot(bc, full=True):
         body = d["text"] or "(no text on the page)"
         if d["total"] > len(d["text"]):
             body += f"\n[showing the first {len(d['text'])} of {d['total']} chars; browser_find('words') searches the rest]"
-        out.append(("(main content)\n" if d["main"] else "") + body)
+        warn = safety.guard_text(d["text"])
+        out.append(safety.UNTRUSTED + ("\n" + warn if warn else "") + "\n" + ("(main content)\n" if d["main"] else "") + body)
     pos = f"scrolled {d['scroll']}% of ~{d['screens']} screens" if d["screens"] > 1.1 else "the whole page fits on screen"
     els = "\n".join(d["elements"]) or "(none)"
     more = f"\n…and {d['more']} more further down (scroll to see them)" if d["more"] else ""
@@ -395,18 +472,35 @@ def browser_open(url: str, new_tab: bool = False, _ctx=None):
     """Open a URL and return the page text and numbered elements.
     url: address to open
     new_tab: open in a new tab instead of the current one"""
-    bc = _bc(_ctx)
-    if "://" not in url and not url.startswith("about:"):
-        url = "https://" + url
+    if "://" not in url and not SCHEME_RE.match(url):
+        url = safety.with_scheme(url)
+    scheme = urlparse(url).scheme
+    if scheme not in ("http", "https") and url != "about:blank":
+        return f"error: only http and https pages can be opened (not {scheme}:)"
+    bc = _bc(_ctx, url)
     if not _host_ok(url, bc):
         return f"error: {urlparse(url).hostname} is not allowed by the browser.allow / browser.block settings"
+    if bc["_tor"]:
+        from .web import tor_reachable
+        if not tor_reachable(_ctx.cfg["tor"]["proxy"]):
+            return (f"error: Tor isn't reachable at {_ctx.cfg['tor']['proxy']}. Start Tor (the tor service, or Tor Browser "
+                    "and set tor.proxy to socks5h://127.0.0.1:9150); nothing was opened")
+    why = safety.check_url(url, _ctx.cfg, trusted=_TRUSTED)
+    if why:
+        host = urlparse(url).hostname
+        if not _ctx.approve("browser_open", f"{url}\nThis address is listed as {why}.", key="browser_open:unsafe", force=True):
+            return f"error: {host} is listed as {why}; it was not opened. Tell the user."
+        _TRUSTED.add(host)
 
     def job():
         pg = _new_page() if new_tab and _S.get("context") else _page(bc)
-        pg.goto(url, wait_until="domcontentloaded", timeout=int(bc.get("nav_timeout", 45)) * 1000)
+        nav = int(bc.get("nav_timeout", 45)) * (2 if bc["_tor"] else 1)  # Tor circuits are slow
+        pg.goto(url, wait_until="domcontentloaded", timeout=nav * 1000)
+        if _onion(url):
+            _S["onion"] = True
         _settle(pg)
         return _snapshot(bc)
-    return _run(job, timeout=int(bc.get("nav_timeout", 45)) + 30)
+    return _run(job, timeout=int(bc.get("nav_timeout", 45)) * 2 + 30)
 
 
 @tool(pack="browser")
@@ -444,6 +538,12 @@ def browser_type(target: str, text: str, submit: bool = False, _ctx=None):
     text: text to type
     submit: press Enter after typing"""
     bc = _bc(_ctx)
+    t = str(target).strip().strip("[]")
+    if t in (_S.get("secret") or set()) and (_ctx.permission == "auto" or "browser_type" in _ctx.always):
+        # passwords and card numbers are never typed without a fresh yes, whatever the permission mode
+        if not _ctx.approve("browser_type", f"[{t}] {_label(t)}\nThis is a password or payment field on "
+                            f"{_S.get('last', ('?',))[0]}", key="browser_type:secret", force=True):
+            return "error: the user declined typing into this sensitive field."
 
     def job():
         pg = _page(bc)

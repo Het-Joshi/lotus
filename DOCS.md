@@ -173,11 +173,22 @@ Keeping it controlled:
 - After an action, the page text is resent only if it changed, and long pages point the model at `browser_find`. Both keep small windows small.
 - With a visible window, the element being clicked or typed into flashes with a lotus-pink outline.
 
+Safe browsing, on by default:
+
+- Pages are checked against public malware and phishing lists (URLhaus and OpenPhish, cached in `~/.lotus/safebrowsing` and refreshed every 6 hours) before they load. Add `"phishing-database"` to `safe_browsing.lists` for about 400,000 more phishing domains, or set `safe_browsing.google_api_key` to also ask Google Safe Browsing. URL lists are matched exactly, so a shared host like GitHub isn't blocked because one file on it is bad.
+- A listed page opened on purpose (`browser_open`, `fetch_url`) asks you first, even in `auto` mode; saying yes trusts that site for the session. A listed page reached by a click or redirect is blocked and reported. Search results on a list are marked.
+- Page text is labelled as untrusted data. Text written to steer an AI ("ignore previous instructions…", "if you are an AI assistant…") is flagged so the model tells you instead of acting on it.
+- Passwords, card numbers, CVVs and one-time codes are never typed without a fresh yes, whatever the permission mode.
+- Programs and scripts (`.exe`, `.dmg`, `.sh`, `.apk`, macro documents, …) are never downloaded unless `safe_browsing.allow_executables` is on.
+- Only `http` and `https` pages open (no `file:`, `javascript:` or `data:`), and unencrypted `http` pages carry a warning.
+
+Tor: with `/tor on` (or `--tor`) the browser runs behind Tor as well, not only the web tools. Any `.onion` address switches it to Tor by itself, and it stays on Tor until closed. Names are resolved inside Tor, WebRTC can't reveal your address, QUIC is off, and the locale and time zone are generic. Switching Tor on or off restarts the browser, and the snapshot says `(via Tor)`. Your own Chrome (`browser.cdp_url`) can't be put behind Tor from lotus.
+
 `/browser` shows the open tabs, `/browser close` closes it, and `/browser show` / `/browser hide` switch between a window and headless. Set `browser.cdp_url` to `http://localhost:9222` to drive your own Chrome (start it with `--remote-debugging-port=9222`).
 
 ### Tor
 
-Start Tor (the `tor` service on port 9050, or Tor Browser on 9150), then use `lotus --tor`, `/tor on`, or let the model pass `via_tor=true`. `.onion` URLs always go through Tor. Requests run through `curl --socks5-hostname`, so DNS also resolves inside Tor. Check with `/tor`.
+Start Tor (the `tor` service on port 9050, or Tor Browser on 9150), then use `lotus --tor`, `/tor on`, or let the model pass `via_tor=true`. `.onion` URLs always go through Tor. Web requests run through `curl --socks5-hostname`, and the browser through Chromium's SOCKS5 proxy, so DNS also resolves inside Tor. Check with `/tor`.
 
 ## Memory
 
@@ -268,6 +279,10 @@ Load with `/tools mcp:fs`, or let the model call `load_tools("mcp:fs")`. Tools f
 | `repeat_penalty` | null | For example `1.1` if a model keeps repeating itself. `null` keeps the model's default. |
 | `max_output_tokens` | 0 | Cap on one reply (Ollama's `num_predict`). lotus warns when a reply hits it. |
 | `theme` | auto | `auto` follows the terminal background; `dark` or `light` forces one. |
+| `safe_browsing.enabled` | true | Check pages against malware and phishing lists before they load. |
+| `safe_browsing.lists` | urlhaus, openphish | Add `phishing-database` for ~400k phishing domains (11 MB). |
+| `safe_browsing.google_api_key` | "" | Also check Google Safe Browsing. |
+| `safe_browsing.ignore` | [] | Sites never to flag. |
 | `browser.allow` / `browser.block` | [] | Sites the browser may (or may never) open, e.g. `["wikipedia.org"]`. Subdomains count. |
 | `browser.confirm_risky` | true | Ask before clicking buy / send / delete / submit-like buttons. |
 | `browser.dialogs` | dismiss | What to do with `confirm()` / `prompt()` dialogs: `dismiss` or `accept`. |
@@ -289,6 +304,7 @@ lotus/
   keys.py        Esc-to-stop and type-ahead while a turn runs
   theme.py       palettes, light/dark detection, ANSI helpers
   memory.py      memory.md, LOTUS.md, .LOTUS_REM.txt;  mcp.py  MCP stdio client
+  safety.py      safe browsing: threat lists, prompt-injection check, download rules
   plugins.py     plugin loader;  automation.py  recipes
   tools/         core, web, browser, system
 ```

@@ -64,6 +64,7 @@ git diff | lotus "write a commit message"
 - **Forgiving tool calls.** Calls a small model writes as plain text, with broken JSON or with the wrong argument names still go through.
 - **Stays on task.** Long outputs are paged, stale file reads are retired, the plan stays in view, and old history is compacted into a summary.
 - **You're in control.** `Esc` stops it mid-task: the reply, a running command, the browser. Type while it works and your message is queued for next.
+- **Browses safely.** Known malware and phishing pages are blocked before they load, pages that try to give it orders are flagged, passwords and card numbers always need your yes, and programs are never downloaded. `/tor on` routes the browser through Tor too, `.onion` included.
 - **Remembers per project.** `LOTUS.md` holds instructions and facts for a folder. `.LOTUS_REM.txt` notes where you left off, so the next session picks up from there.
 - **Extensible.** MCP servers, Python plugins (a function with a docstring becomes a tool), and recipes that can run on a schedule.
 

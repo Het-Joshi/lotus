@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lotus-agent"
+version = "0.2.0"
+description = "A lightweight, local-first CLI agent harness for Ollama, built for small models."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{name = "Het Joshi"}]
+dependencies = []
+keywords = ["ollama", "agent", "cli", "llm", "local", "mcp"]
+classifiers = ["Environment :: Console", "Operating System :: OS Independent", "Programming Language :: Python :: 3"]
+
+[project.urls]
+Homepage = "https://het-joshi.github.io/lotus/"
+Source = "https://github.com/Het-Joshi/lotus"
+Issues = "https://github.com/Het-Joshi/lotus/issues"
+
+[project.optional-dependencies]
+browser = ["playwright>=1.40"]
+
+[project.scripts]
+lotus = "lotus.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["lotus*"]

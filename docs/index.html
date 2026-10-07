@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lotus · a local agent for Ollama</title>
+<meta name="description" content="A lightweight agent harness for Ollama, built to work with small local models. One file to install, no dependencies.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text x='0' y='13' font-size='14' fill='%23c2477f'>❀</text></svg>">
+<style>
+  :root {
+    --bg: #fbf9f7; --fg: #1f1a1d; --dim: #6e6469; --line: #e6dfe2;
+    --accent: #b0336e; --code-bg: #f2eef0; --term-bg: #1d191c; --term-fg: #e9e1e6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151214; --fg: #ebe4e8; --dim: #9a8f95; --line: #2c2629;
+            --accent: #e77fae; --code-bg: #211c1f; --term-bg: #0e0c0d; }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 56px 20px 40px; }
+  code, pre, .mono { font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .logo { margin: 0; color: var(--accent); font-size: 13px; line-height: 1.25; }
+  .logo .water { color: var(--dim); }
+  nav a { margin-left: 18px; font-size: 15px; }
+  nav a:first-child { margin-left: 0; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 28px 0 8px; letter-spacing: -0.01em; }
+  h1 span { color: var(--dim); font-weight: 400; }
+  .lede { color: var(--dim); font-size: 18px; margin: 0 0 28px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim);
+       font-weight: 600; margin: 52px 0 14px; }
+  .install { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 8px;
+             background: var(--code-bg); overflow: hidden; }
+  .install code { flex: 1; padding: 14px 16px; font-size: 14px; overflow-wrap: anywhere; }
+  .install code::before { content: "$ "; color: var(--dim); }
+  .install button { border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--fg);
+                    font: 14px inherit; padding: 0 16px; cursor: pointer; min-width: 74px; }
+  .install button:hover { color: var(--accent); }
+  .small { color: var(--dim); font-size: 14px; margin: 10px 0 0; }
+  .small code, p code, li code, td code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 0.88em; }
+  pre.term { background: var(--term-bg); color: var(--term-fg); border-radius: 8px; padding: 18px 18px;
+             font-size: 13px; line-height: 1.55; overflow-x: auto; margin: 0; }
+  .p { color: #f4a6c6; } .b { color: #e0569b; } .y { color: #f2c14e; } .g { color: #7fb685; }
+  .m { color: #968494; } .r { color: #e86060; } .w { color: #6c8ead; }
+  dl { margin: 0; display: grid; grid-template-columns: 170px 1fr; gap: 12px 20px; }
+  dt { font-weight: 600; }
+  dd { margin: 0; color: var(--dim); }
+  ul { padding-left: 20px; margin: 0; }
+  li { margin: 4px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; }
+  td { padding: 7px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td:first-child { width: 46%; padding-right: 16px; white-space: nowrap; }
+  footer { margin-top: 64px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--dim);
+           font-size: 14px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  @media (max-width: 600px) {
+    main { padding: 32px 16px 32px; }
+    h1 { font-size: 25px; }
+    dl { grid-template-columns: 1fr; gap: 2px; }
+    dd { margin-bottom: 12px; }
+    td:first-child { white-space: normal; }
+    nav a { margin-left: 14px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+<pre class="logo mono" aria-label="lotus logo">          ,
+       .-/ \-.
+   .-.( (   ) ).-.
+  (   \ \   / /   )
+   '-._\_\_/_/_.-'
+<span class="water">~~~~~~~~~~~~~~~~~~~~~~</span></pre>
+    <nav><a href="https://github.com/Het-Joshi/lotus">GitHub</a><a href="https://github.com/Het-Joshi/lotus#readme">Docs</a><a href="https://github.com/Het-Joshi/lotus/blob/main/install.sh">install.sh</a></nav>
+  </header>
+
+  <h1>lotus <span>· a local agent for Ollama that fits small models</span></h1>
+  <p class="lede">Files, shell, web and a real browser, driven by a 4–8B model on your own machine. Pure Python standard library, nothing to configure.</p>
+
+  <div class="install">
+    <code id="cmd">curl -fsSL https://raw.githubusercontent.com/Het-Joshi/lotus/main/install.sh | sh</code>
+    <button id="copy" type="button">Copy</button>
+  </div>
+  <p class="small">Linux and macOS. Add browser control with <code>| sh -s -- --browser</code>. Uses uv or pipx if you have them, otherwise a private virtualenv; never needs root. Elsewhere: <code>pip install "lotus-agent @ https://github.com/Het-Joshi/lotus/archive/main.tar.gz"</code>. You'll need <a href="https://ollama.com/download">Ollama</a> and a model, e.g. <code>ollama pull qwen3:4b</code>.</p>
+
+  <h2>What it looks like</h2>
+  <p class="small" style="margin:-6px 0 12px">An example session in a dark terminal.</p>
+<pre class="term"><span class="b">❀</span> what's using port 8080, and is it safe to stop?
+
+  <span class="y">⚙</span> <span class="p"><b>shell</b></span> <span class="m">ss -ltnp 'sport = :8080'</span> <span class="g">✓</span> <span class="m">0.1s</span>
+  <span class="y">⚙</span> <span class="p"><b>shell</b></span> <span class="m">ps -o pid,etime,cmd -p 41873</span> <span class="g">✓</span> <span class="m">0.0s</span>
+
+Port 8080 is held by <span class="y">uvicorn app.main:app --reload</span> (pid 41873),
+started 3 hours ago from <span class="y">~/work/api</span>. It's your dev server, so
+stopping it only affects local testing.
+
+<span class="b">❀</span> stop it
+
+<span class="y">  ╭─ <b>approve</b></span> shell
+<span class="y">  │</span> <span class="m">kill 41873</span>
+<span class="y">  ╰─</span> <span class="g">✓ allowed</span>
+  <span class="b">✿</span> <span class="p">vichāra</span> <span class="m">· reflecting · 2s · esc to stop</span>
+  <span class="m">╰ qwen3:4b   2.1k in · 46 out   38 tok/s   4.2s</span>   <span class="b">❀❀</span><span class="m">······ 18% of 16k</span></pre>
+
+  <h2>Why it exists</h2>
+  <p>Most agent harnesses are built for frontier models and then pointed at Ollama. On a small local model they break quietly:</p>
+  <ul>
+    <li><b>Silent truncation.</b> Ollama drops whatever doesn't fit its default context, without an error. lotus reads each model's real limit, sizes <code>num_ctx</code> for every prompt, and warns before anything is cut.</li>
+    <li><b>Broken tool calls.</b> Small models often write tool calls as text, or with the wrong argument names. lotus uses native calls when it can and rescues and repairs the rest.</li>
+    <li><b>Context rot.</b> One log file fills the window and the model forgets the task. lotus pages long output, retires stale reads, keeps the plan at the end of the window, and compacts history into a structured summary.</li>
+  </ul>
+  <p>The system prompt is about 250 tokens. Tools come in packs that load only when needed.</p>
+
+  <h2>What's in it</h2>
+  <dl>
+    <dt>Tools</dt><dd>Files, shell, grep, web search and fetch (optionally over Tor), clipboard, apps, notifications, charts and tables in the terminal, sub-agents with a fresh context.</dd>
+    <dt>Browser</dt><dd>Pages become text plus numbered elements, so a small model can say <code>browser_click("3")</code>. Asks before buy, send or delete buttons; site allow and block lists; tabs, dialogs and downloads handled.</dd>
+    <dt>Control</dt><dd><kbd>Esc</kbd> stops a turn anywhere: the reply, a running command, the browser, sub-agents. Type while it works and your message is queued. Commands, writes and form input ask first.</dd>
+    <dt>Memory</dt><dd><code>LOTUS.md</code> keeps instructions and facts for each project. <code>.LOTUS_REM.txt</code> notes where the last session left off, so the next one picks up there.</dd>
+    <dt>Extending</dt><dd>MCP servers, Python plugins (a function and a docstring is a tool), and recipes: saved prompts you can run on a schedule.</dd>
+    <dt>Requirements</dt><dd>Python 3.9+ and Ollama. No other dependencies; Playwright only for the browser.</dd>
+  </dl>
+
+  <h2>Use</h2>
+  <table>
+    <tr><td><code>lotus</code></td><td>interactive session</td></tr>
+    <tr><td><code>lotus "what's using port 8080?"</code></td><td>one question, then exit</td></tr>
+    <tr><td><code>git diff | lotus "commit message"</code></td><td>pipe anything in; output is clean markdown</td></tr>
+    <tr><td><code>lotus -r</code></td><td>resume the last session</td></tr>
+    <tr><td><code>lotus run standup</code></td><td>run a saved recipe</td></tr>
+    <tr><td><code>lotus doctor</code></td><td>check Ollama, models, browser, Tor</td></tr>
+  </table>
+  <p class="small">Inside a session, type <code>/</code> for every command, <code>@path</code> to attach a file, <code>!cmd</code> to run a shell command yourself. The <a href="https://github.com/Het-Joshi/lotus#readme">README</a> covers the rest.</p>
+
+  <footer>
+    <span>MIT licensed · <a href="https://github.com/Het-Joshi/lotus">source on GitHub</a></span>
+    <span class="mono">कमल</span>
+  </footer>
+</main>
+<script>
+  document.getElementById("copy").addEventListener("click", function () {
+    var b = this, text = document.getElementById("cmd").textContent;
+    var done = function () { b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy"; }, 1500); };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, function () { fallback(text); done(); });
+    } else { fallback(text); done(); }
+    function fallback(t) {
+      var a = document.createElement("textarea"); a.value = t; a.style.position = "fixed"; a.style.opacity = "0";
+      document.body.appendChild(a); a.select();
+      try { document.execCommand("copy"); } catch (e) {}
+      a.remove();
+    }
+  });
+</script>
+</body>
+</html>

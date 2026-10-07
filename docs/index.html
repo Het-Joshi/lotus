@@ -40,6 +40,8 @@
   .install button { border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--fg);
                     font: 14px inherit; padding: 0 16px; cursor: pointer; min-width: 74px; }
   .install button:hover { color: var(--accent); }
+  .label { font-size: 14px; font-weight: 600; margin: 18px 0 6px; }
+  .label span { font-weight: 400; color: var(--dim); }
   .small { color: var(--dim); font-size: 14px; margin: 10px 0 0; }
   .small code, p code, li code, td code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 0.88em; }
   pre.term { background: var(--term-bg); color: var(--term-fg); border-radius: 8px; padding: 18px 18px;
@@ -81,11 +83,17 @@
   <h1>lotus <span>· a local agent for Ollama that fits small models</span></h1>
   <p class="lede">Files, shell, web and a real browser, driven by a 4–8B model on your own machine. Pure Python standard library, nothing to configure.</p>
 
+  <p class="label">Install</p>
   <div class="install">
-    <code id="cmd">curl -fsSL https://raw.githubusercontent.com/Het-Joshi/lotus/main/install.sh | sh</code>
-    <button id="copy" type="button">Copy</button>
+    <code>curl -fsSL https://raw.githubusercontent.com/Het-Joshi/lotus/main/install.sh | sh</code>
+    <button class="copy" type="button">Copy</button>
   </div>
-  <p class="small">Linux and macOS. Add browser control with <code>| sh -s -- --browser</code>. Uses uv or pipx if you have them, otherwise a private virtualenv; never needs root. Elsewhere: <code>pip install "lotus-agent @ https://github.com/Het-Joshi/lotus/archive/main.tar.gz"</code>. You'll need <a href="https://ollama.com/download">Ollama</a> and a model, e.g. <code>ollama pull qwen3:4b</code>.</p>
+  <p class="label">Install with browser control <span>(adds Playwright and Chromium, about 150 MB)</span></p>
+  <div class="install">
+    <code>curl -fsSL https://raw.githubusercontent.com/Het-Joshi/lotus/main/install.sh | sh -s -- --browser</code>
+    <button class="copy" type="button">Copy</button>
+  </div>
+  <p class="small">Linux and macOS. Uses uv or pipx if you have them, otherwise a private virtualenv; never needs root. Elsewhere: <code>pip install "lotus-agent @ https://github.com/Het-Joshi/lotus/archive/main.tar.gz"</code>. You'll need <a href="https://ollama.com/download">Ollama</a> and a model, e.g. <code>ollama pull qwen3:4b</code>.</p>
 
   <h2>What it looks like</h2>
   <p class="small" style="margin:-6px 0 12px">An example session in a dark terminal.</p>
@@ -142,18 +150,20 @@ stopping it only affects local testing.
   </footer>
 </main>
 <script>
-  document.getElementById("copy").addEventListener("click", function () {
-    var b = this, text = document.getElementById("cmd").textContent;
-    var done = function () { b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy"; }, 1500); };
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(text).then(done, function () { fallback(text); done(); });
-    } else { fallback(text); done(); }
-    function fallback(t) {
-      var a = document.createElement("textarea"); a.value = t; a.style.position = "fixed"; a.style.opacity = "0";
-      document.body.appendChild(a); a.select();
-      try { document.execCommand("copy"); } catch (e) {}
-      a.remove();
-    }
+  function fallback(t) {
+    var a = document.createElement("textarea"); a.value = t; a.style.position = "fixed"; a.style.opacity = "0";
+    document.body.appendChild(a); a.select();
+    try { document.execCommand("copy"); } catch (e) {}
+    a.remove();
+  }
+  document.querySelectorAll(".copy").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var text = b.previousElementSibling.textContent;
+      var done = function () { b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy"; }, 1500); };
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(done, function () { fallback(text); done(); });
+      } else { fallback(text); done(); }
+    });
   });
 </script>
 </body>

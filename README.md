@@ -38,7 +38,13 @@ Linux and macOS, one line:
 curl -fsSL https://raw.githubusercontent.com/Het-Joshi/lotus/main/install.sh | sh
 ```
 
-Add browser control (Playwright and Chromium) with `| sh -s -- --browser`. The script uses `uv` or `pipx` if you have them, and otherwise a private virtualenv in `~/.local/share/lotus` linked into `~/.local/bin`. It never needs root. `--uninstall` removes it and keeps your `~/.lotus` config and memory. [Read it first](install.sh) if you like.
+With browser control (also installs Playwright and Chromium, about 150 MB):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Het-Joshi/lotus/main/install.sh | sh -s -- --browser
+```
+
+Running the browser line later adds browser control to an existing install. The script uses `uv` or `pipx` if you have them, and otherwise a private virtualenv in `~/.local/share/lotus` linked into `~/.local/bin`. It never needs root. `--uninstall` removes it and keeps your `~/.lotus` config and memory. [Read it first](install.sh) if you like.
 
 Or with pip, anywhere, Windows included:
 

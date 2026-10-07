@@ -15,6 +15,8 @@ Files, shell, web and a real browser, driven by a 4–8B model on your own machi
 
 **Website:** https://het-joshi.github.io/lotus/ · **Docs:** [DOCS.md](DOCS.md)
 
+![lotus typing example prompts](docs/lotus-prompts.gif)
+
 ## Install
 
 ```bash

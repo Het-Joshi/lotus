@@ -66,6 +66,21 @@
     td:first-child { white-space: normal; }
     nav a { margin-left: 14px; }
   }
+  .ask { margin: 0; background: var(--term-bg); color: var(--term-fg); border-radius: 10px;
+         padding: 30px 26px; min-height: 148px; border: 1px solid var(--line); cursor: pointer; user-select: none;
+         font-size: 21px; line-height: 1.45; display: flex; align-items: center; }
+  .ask .line { display: block; }
+  .ask .who { color: #e0569b; white-space: nowrap; }
+  .ask .typed { color: #f4ecf0; }
+  .ask .caret { display: inline-block; width: 0.55em; height: 1.05em; margin-left: 2px; vertical-align: -0.15em;
+                background: #e0569b; animation: blink 1s steps(1) infinite; }
+  .ask.typing .caret { animation: none; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .ask-hint { color: var(--dim); font-size: 13px; margin: 8px 0 0; display: flex; justify-content: space-between; gap: 12px; }
+  .nowrap { white-space: nowrap; } .tap { display: none; }
+  @media (hover: none) { .tap { display: inline; } .desk { display: none; } }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  @media (max-width: 600px) { .ask { font-size: 17px; padding: 22px 18px; min-height: 170px; } }
 </style>
 </head>
 <body>
@@ -94,6 +109,13 @@
     <button class="copy" type="button">Copy</button>
   </div>
   <p class="small">Linux and macOS. Uses uv or pipx if you have them, otherwise a private virtualenv; never needs root. Elsewhere: <code>pip install "lotus-agent @ https://github.com/Het-Joshi/lotus/archive/main.tar.gz"</code>. You'll need <a href="https://ollama.com/download">Ollama</a> and a model, e.g. <code>ollama pull qwen3:4b</code>.</p>
+
+  <h2>Ask it anything</h2>
+  <div class="ask mono" id="ask" title="Click for the next one">
+    <span class="line" aria-hidden="true"><span class="who">❀ lotus,</span> <span class="typed" id="typed">open the browser and buy the cheapest water bottle on Amazon.</span><span class="caret"></span></span>
+  </div>
+  <p class="ask-hint"><span>A few things to try. It asks before anything that pays, sends or deletes.</span><span class="nowrap"><span class="desk">click</span><span class="tap">tap</span> for another</span></p>
+  <ul class="sr" id="prompt-list"></ul>
 
   <h2>What it looks like</h2>
   <p class="small" style="margin:-6px 0 12px">An example session in a dark terminal.</p>
@@ -149,6 +171,64 @@ stopping it only affects local testing.
     <span class="mono">कमल</span>
   </footer>
 </main>
+<script>
+  (function () {
+    var prompts = [
+      "open the browser and buy the cheapest water bottle on Amazon.",
+      "compare flight prices from Boston to Mumbai in December and make me a table.",
+      "find out what the fuck is eating 40 GB of my disk.",
+      "kill whatever is squatting on port 3000.",
+      "read my last 200 commits and tell me exactly when I gave up.",
+      "summarise this 90-page PDF like I have the attention span of a goldfish.",
+      "fix this goddamn merge conflict and touch nothing else.",
+      "watch this page every 30 minutes and ping me when the PS5 is back in stock.",
+      "find every TODO I wrote in 2023 and judge me.",
+      "check my dependencies for known CVEs before my boss does.",
+      "rename these 400 vacation photos by date, not IMG_8823.",
+      "write a commit message that makes this diff look intentional.",
+      "read @server.log and tell me why the API died at 3am.",
+      "research the three best note-taking apps in parallel and pick one for me.",
+      "figure out why my laptop sounds like a jet engine.",
+      "explain this regex to me like I'm five, then fix it."
+    ];
+    var list = document.getElementById("prompt-list");
+    prompts.forEach(function (p) { var li = document.createElement("li"); li.textContent = "lotus, " + p; list.appendChild(li); });
+
+    var box = document.getElementById("ask"), out = document.getElementById("typed");
+    var order = [0].concat(prompts.slice(1).map(function (_, i) { return i + 1; }).sort(function () { return Math.random() - 0.5; }));
+    var k = 0, timer = null;
+    var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    function later(fn, ms) { clearTimeout(timer); timer = setTimeout(fn, ms); }
+    function next() { k = (k + 1) % order.length; return prompts[order[k]]; }
+
+    function type(text, i) {
+      box.classList.add("typing");
+      out.textContent = text.slice(0, i);
+      if (i < text.length) {
+        var ch = text.charAt(i - 1), pause = ",.".indexOf(ch) >= 0 ? 260 : 28 + Math.random() * 45;
+        later(function () { type(text, i + 1); }, pause);
+      } else {
+        box.classList.remove("typing");
+        later(function () { erase(text, text.length); }, 2400);
+      }
+    }
+    function erase(text, i) {
+      box.classList.add("typing");
+      out.textContent = text.slice(0, i);
+      if (i > 0) later(function () { erase(text, i - 1); }, 12);
+      else later(function () { type(next(), 1); }, 350);
+    }
+    function rotate() { out.textContent = next(); later(rotate, 4000); }
+
+    box.addEventListener("click", function () {
+      if (still) { out.textContent = next(); later(rotate, 4000); }
+      else type(next(), 1);
+    });
+    if (still) later(rotate, 4000);
+    else later(function () { erase(out.textContent, out.textContent.length); }, 2600);
+  })();
+</script>
 <script>
   function fallback(t) {
     var a = document.createElement("textarea"); a.value = t; a.style.position = "fixed"; a.style.opacity = "0";

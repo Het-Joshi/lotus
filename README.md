@@ -15,7 +15,7 @@ Pure Python standard library. No required dependencies. Runs on Windows, macOS a
 
 ## The problem it solves
 
-Most agent harnesses are built for frontier models and then pointed at Ollama. On a 4–8B local model that breaks in quiet, confusing ways:
+Most agent harnesses are built for frontier models and then pointed at Ollama. On a local model that breaks in confusing ways:
 
 - **Silent truncation.** Ollama loads models with a small default context and drops whatever doesn't fit, without an error. Harnesses that send 10k+ tokens of system prompt and tool schemas lose the user's actual question, and the model looks "dumb".
 - **Broken tool calls.** The OpenAI-compatible `/v1` endpoint ignores per-request `num_ctx` and mangles streamed tool calls. Many small models also write tool calls as plain text even when they "support" tools.

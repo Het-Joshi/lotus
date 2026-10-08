@@ -140,6 +140,7 @@ stopping it only affects local testing.
   <dl>
     <dt>Browse onions</dt><dd><code>/tor on</code> sends the browser, search and page reading through Tor, and any <code>.onion</code> address switches over by itself. DNS stays inside Tor, WebRTC can't leak your IP, QUIC is off. Tested against check.torproject.org and a real WebRTC probe.</dd>
     <dt>Dodge phishing</dt><dd>Pages are checked against live malware and phishing lists before they load. Hidden "ignore your instructions" text is flagged. Passwords and card numbers need your yes even in auto mode, and <code>.exe</code> downloads are refused.</dd>
+    <dt>Drive a browser like you</dt><dd>Private windows on demand, incognito by default or a profile that remembers logins, Chromium or Firefox. Batches clicks and typing into one step. Hit a captcha? It hands you the window and carries on.</dd>
     <dt>Stop looping</dt><dd>Small reasoning models think in circles. lotus notices, cuts it off, and gets the answer anyway.</dd>
     <dt>Work while you sleep</dt><dd><code>lotus watch onion-watch --every 30m --notify</code> checks your hidden services and pings your desktop.</dd>
     <dt>See and draw</dt><dd>Attach a screenshot and a text-only model hands it to a vision model. Charts, trees and tables render in the terminal.</dd>

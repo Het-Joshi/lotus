@@ -150,7 +150,7 @@ Types: `bar`, `line`, `pie`, `spark`, `graph` (edges render as a tree), `table`.
 | core (always on) | `read_file`, `write_file`, `edit_file`, `list_dir`, `find_files`, `grep`, `shell`, `todo`, `remember`, `recall`, `page_output`, `load_tools`, `view_image` |
 | render | `show_chart`, `show_table` |
 | web | `web_search` (DuckDuckGo, or your SearXNG), `fetch_url` (page as text with numbered links) |
-| browser | `browser_open`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_press`, `browser_select`, `browser_scroll`, `browser_find`, `browser_wait`, `browser_back`, `browser_tabs`, `browser_handoff`, `browser_screenshot`, `browser_close` |
+| browser | `browser_open`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_press`, `browser_select`, `browser_scroll`, `browser_find`, `browser_wait`, `browser_back`, `browser_tabs`, `browser_act`, `browser_handoff`, `browser_screenshot`, `browser_close` |
 | system | `open_path`, `launch_app`, `list_apps`, `clipboard_get`, `clipboard_set`, `notify`, `system_info` |
 | agents | `delegate` (parallel sub-agents with fresh context) |
 
@@ -162,6 +162,28 @@ The browser shows pages to the model as text plus numbered elements, with their 
 [4] input:checkbox Remember me  (unchecked)
 [5] button Place order
 ```
+
+Moving efficiently:
+
+- `browser_act` does several actions in one call (`["type 3 water bottle", "press Enter", "click 12"]`), so a slow local model doesn't need a round trip per click. It stops at the first step that fails and says which. Typing in it is approved like `browser_type`, and passwords or card numbers still get their own approval.
+- Several links to the same place (`No.`, `123`, `Reply`, `Click here`) collapse into one numbered entry with their words merged.
+- An element number that no longer exists fails at once instead of waiting out a timeout.
+- The model is told to open a site's search URL directly (`amazon.com/s?k=...`) instead of looking for its search box.
+
+Windows and profiles:
+
+- **Private by default.** Each launch starts clean, like an incognito window, and nothing is kept.
+- **Persistent:** `/browser persistent` (or `browser.profile: "persistent"`) keeps logins and cookies in `~/.lotus/browser-profile`, so you sign in once. `/browser clear` wipes them, and `/browser private` goes back. Tor never keeps cookies, whatever the setting.
+- **Private windows on demand:** `browser_open(url, private=true)` or `browser_tabs("private")` opens an isolated window with its own cookies, even next to a persistent profile. It's marked `(private)` in the tabs list and forgotten when its last tab closes.
+- **Engine:** `/browser firefox` uses Playwright's Firefox (`python -m playwright install firefox` once); `/browser chromium` switches back. Under Tor, Firefox resolves names inside Tor and has WebRTC switched off entirely.
+- **A browser you start yourself:** launch a Chromium-based browser with remote debugging and its own profile, then `/browser attach`:
+
+  ```bash
+  google-chrome --remote-debugging-port=9222 --user-data-dir=$HOME/.lotus/chrome-attach   # or chromium, brave-browser, microsoft-edge
+  ```
+
+  Chrome 136 and later refuse remote debugging on your everyday profile, hence the separate `--user-data-dir`. Private windows there are real incognito contexts in that browser. `/browser detach` goes back. Your everyday Firefox can't be driven this way: Playwright only drives its own Firefox build.
+- `browser.executable` points lotus at another Chromium-based browser to launch, e.g. `/usr/bin/brave-browser`.
 
 Keeping it controlled:
 
@@ -250,6 +272,14 @@ def weather_cmd(agent, arg):
 
 ### MCP servers
 
+For larger models, Microsoft's [Playwright MCP](https://github.com/microsoft/playwright-mcp) works as an alternative browser pack. Its accessibility snapshots are richer, but its 25 tool descriptions take about 4,300 tokens, too much for a small model's window. Lotus's own `browser` pack is the better fit there. It needs Node and a one-time `npx @playwright/mcp install-browser chrome-for-testing`:
+
+```json
+"mcp": {"playwright": {"command": ["npx", "-y", "@playwright/mcp@latest", "--isolated", "--browser", "chromium"],
+                       "description": "Microsoft's Playwright browser (accessibility snapshots)"}}
+```
+
+
 Any [MCP](https://modelcontextprotocol.io) server becomes a tool pack. It starts only when loaded:
 
 ```json
@@ -285,6 +315,8 @@ Load with `/tools mcp:fs`, or let the model call `load_tools("mcp:fs")`. Tools f
 | `safe_browsing.lists` | urlhaus, openphish | Add `phishing-database` for ~400k phishing domains (11 MB). |
 | `safe_browsing.google_api_key` | "" | Also check Google Safe Browsing. |
 | `safe_browsing.ignore` | [] | Sites never to flag. |
+| `browser.profile` | private | `private`: nothing kept between launches. `persistent`: remember logins in `~/.lotus/browser-profile`. |
+| `browser.engine` | chromium | `chromium` or `firefox` (Playwright's build). |
 | `browser.allow` / `browser.block` | [] | Sites the browser may (or may never) open, e.g. `["wikipedia.org"]`. Subdomains count. |
 | `browser.confirm_risky` | true | Ask before clicking buy / send / delete / submit-like buttons. |
 | `browser.dialogs` | dismiss | What to do with `confirm()` / `prompt()` dialogs: `dismiss` or `accept`. |

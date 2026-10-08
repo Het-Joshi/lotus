@@ -36,6 +36,9 @@ DEFAULTS = {
         "ignore": [],             # sites to never flag, e.g. ["my-test-site.dev"]
     },
     "browser": {
+        "profile": "private",     # private: nothing kept, like incognito; persistent: remember logins (~/.lotus/browser-profile)
+        "engine": "chromium",     # chromium or firefox (python -m playwright install firefox)
+        "executable": "",         # a Chromium-based browser to launch instead, e.g. /usr/bin/brave-browser
         "headless": None,         # None: a window when there's a display, headless otherwise
         "cdp_url": "",            # e.g. http://localhost:9222 to drive your own Chrome
         "channel": "",            # "chrome" or "msedge" to use an installed browser

@@ -48,11 +48,23 @@ SNAP_JS = r"""
   document.querySelectorAll('[data-lotus]').forEach(e => e.removeAttribute('data-lotus'));
   const sel = 'a[href],button,input:not([type=hidden]),textarea,select,summary,[onclick],[contenteditable=""],[contenteditable=true],' +
     '[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=radio],[role=switch],[role=option],[role=combobox],[role=textbox]';
-  const vh = innerHeight, out = [], labels = {}, secret = [];
-  let n = 0, more = 0;
+  const vh = innerHeight, out = [], labels = {}, secret = [], hrefs = {};
+  let n = 0, more = 0, dupes = 0;
   for (const e of document.querySelectorAll(sel)) {
     const r = e.getBoundingClientRect(), st = getComputedStyle(e);
     if (r.width < 2 || r.height < 2 || st.visibility === 'hidden' || st.display === 'none' || st.opacity === '0') continue;
+    // several links to the same place ("No. 123", "123", "Reply", "Click here") become one entry
+    let key = null;
+    if (e.tagName === 'A' && e.href && !e.href.startsWith('javascript:')) {
+      key = e.href.split('#')[0];
+      if (key in hrefs) {  // merge its words into the first entry, if they add anything
+        const h = hrefs[key], extra = (e.innerText || e.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+        if (extra && !h.words.includes(extra.toLowerCase()) && h.words.length < 80) {
+          h.words += ' / ' + extra.toLowerCase(); h.extra.push(extra);
+        }
+        dupes++; continue;
+      }
+    }
     if (r.bottom < -vh || r.top > vh * 3 || n >= opts.max) { more++; continue; }
     n++; e.setAttribute('data-lotus', String(n));
     const tag = e.tagName.toLowerCase();
@@ -87,12 +99,21 @@ SNAP_JS = r"""
     if (tag === 'a') { try { const u = new URL(e.href); label += '  -> ' + (u.host === location.host ? '' : u.host) + u.pathname.slice(0, 50); } catch (x) {} }
     labels[n] = kind + ' ' + label;
     out.push('[' + n + '] ' + kind + ' ' + label + (bits.length ? '  (' + bits.join(', ') + ')' : ''));
+    if (key) hrefs[key] = {i: out.length - 1, words: label.toLowerCase(), extra: [], label, kind, n, bits};
+  }
+  for (const k in hrefs) {  // rewrite merged entries: "[1] a No. / Reply / Click here  -> /t/1"
+    const h = hrefs[k];
+    if (!h.extra.length) continue;
+    const [text, arrow] = h.label.split('  -> ');
+    const merged = [text].concat(h.extra).filter(Boolean).join(' / ').slice(0, 90) + (arrow ? '  -> ' + arrow : '');
+    labels[h.n] = h.kind + ' ' + merged;
+    out[h.i] = '[' + h.n + '] ' + h.kind + ' ' + merged + (h.bits.length ? '  (' + h.bits.join(', ') + ')' : '');
   }
   const body = document.body, main = document.querySelector('main, [role=main], article');
   const useMain = main && main.innerText.trim().length > 400;
   let text = ((useMain ? main : body) || {innerText: ''}).innerText.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   const sh = Math.max(document.documentElement.scrollHeight, body ? body.scrollHeight : 0);
-  return {title: document.title, url: location.href, elements: out, labels, secret, text: text.slice(0, opts.chars), total: text.length,
+  return {title: document.title, url: location.href, elements: out, labels, secret, dupes, text: text.slice(0, opts.chars), total: text.length,
           main: !!useMain, more, scroll: sh > vh ? Math.round(100 * scrollY / Math.max(1, sh - vh)) : 100,
           screens: Math.max(1, Math.round(sh / vh * 10) / 10)};
 }
@@ -184,9 +205,16 @@ def _tidy(e):
 
 
 def _stop():
+    for cx in _S.get("private", []):
+        with contextlib.suppress(Exception):
+            cx.close()
     try:
-        if _S.get("browser") and not _S.get("cdp"):
+        if _S.get("persistent") and _S.get("context"):
+            _S["context"].close()  # writes the profile to disk
+        elif _S.get("browser") and not _S.get("cdp"):
             _S["browser"].close()
+        if _S.get("pbrowser"):
+            _S["pbrowser"].close()
         if _S.get("pw"):
             _S["pw"].stop()
     except Exception:
@@ -267,34 +295,29 @@ def _proxy(ctx):
     return "socks5://" + hp
 
 
-def _launch(bc):
-    tor, cfg = bc.get("_tor"), bc.get("_cfg")
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        raise RuntimeError("browser tools need Playwright: pip install playwright && python -m playwright install chromium")
-    pw = sync_playwright().start()
-    _S["pw"] = pw
-    if bc.get("cdp_url"):
-        if tor:
-            pw.stop()
-            _S.clear()
-            raise RuntimeError("Tor can't be applied to your own Chrome (browser.cdp_url); start that Chrome with "
-                               f"--proxy-server={tor}, or clear cdp_url to let lotus launch a Tor-routed browser")
-        b = pw.chromium.connect_over_cdp(bc["cdp_url"])
-        context = b.contexts[0] if b.contexts else b.new_context()
-        _S.update(cdp=True, mode=f"your Chrome at {bc['cdp_url']}")
-    else:
-        headless = bc.get("headless")
-        if headless is None:
-            headless = sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-        kw = {"headless": headless, "args": []}
+def _engine(pw, bc):
+    name = (bc.get("engine") or "chromium").lower()
+    if name not in ("chromium", "firefox"):
+        raise RuntimeError(f"browser.engine must be chromium or firefox, not {name!r}")
+    return name, getattr(pw, name)
+
+
+def _launch_opts(bc, tor, engine):
+    """Options for launching a browser (and for a persistent profile, which takes both kinds)."""
+    headless = bc.get("headless")
+    if headless is None:
+        headless = sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    kw = {"headless": headless}
+    if engine == "chromium":
+        kw["args"] = []
         if bc.get("channel"):
             kw["channel"] = bc["channel"]  # "chrome" or "msedge" to use an installed browser
-        ctx_kw = {"viewport": {"width": 1280, "height": 900}, "accept_downloads": True}
-        if tor:
-            kw["proxy"] = {"server": tor}
-            proxy_host = tor.split("://")[-1].rsplit(":", 1)[0]
+        if bc.get("executable"):
+            kw["executable_path"] = os.path.expanduser(bc["executable"])  # e.g. Brave
+    if tor:
+        kw["proxy"] = {"server": tor}
+        proxy_host = tor.split("://")[-1].rsplit(":", 1)[0]
+        if engine == "chromium":
             kw["args"] += [
                 # no DNS outside the proxy; only the proxy itself is reached directly
                 f"--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE {proxy_host} , EXCLUDE localhost",
@@ -302,11 +325,23 @@ def _launch(bc):
                 "--webrtc-ip-handling-policy=disable_non_proxied_udp",
                 "--disable-quic", "--dns-prefetch-disable", "--no-pings",
             ]
-            ctx_kw.update(locale="en-US", timezone_id="UTC")  # like Tor Browser: don't give away where you are
-        b = pw.chromium.launch(**kw)
-        context = b.new_context(**ctx_kw)
-        _S.update(cdp=False, mode=("headless" if headless else "window") + (" via Tor" if tor else ""))
-    _S.update(browser=b, context=context, headless=_S["mode"].startswith("headless"), bc=bc, tor=tor, cfg=cfg)
+        else:
+            kw["firefox_user_prefs"] = {"network.proxy.socks_remote_dns": True, "media.peerconnection.enabled": False,
+                                        "network.dns.disablePrefetch": True, "network.http.http3.enable": False,
+                                        "browser.send_pings": False}
+    return kw, headless
+
+
+def _context_opts(tor):
+    o = {"viewport": {"width": 1280, "height": 900}, "accept_downloads": True}
+    if tor:
+        o.update(locale="en-US", timezone_id="UTC")  # like Tor Browser: don't give away where you are
+    return o
+
+
+def _setup(context, bc, private=False):
+    """Safety guard, dialogs, downloads and popups for one window (browser context)."""
+    cfg = bc.get("_cfg")
     sb_on = safety._cfg(cfg)["enabled"]
     if bc.get("allow") or bc.get("block") or sb_on:
         def guard(route):
@@ -331,24 +366,98 @@ def _launch(bc):
         _S["page"] = p
 
     context.on("page", adopt)
-    pages = context.pages
-    for p in pages:
+    for p in context.pages:
         _wire(p, bc)
+    if private:
+        _S.setdefault("private", []).append(context)
+
+
+def profile_dir(bc):
+    return home() / "browser-profile" / (bc.get("engine") or "chromium").lower()
+
+
+def _launch(bc):
+    tor, cfg = bc.get("_tor"), bc.get("_cfg")
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise RuntimeError("browser tools need Playwright: pip install playwright && python -m playwright install chromium")
+    pw = sync_playwright().start()
+    _S["pw"] = pw
+    engine, kind = _engine(pw, bc)
+    persistent = (bc.get("profile") or "private") == "persistent" and not tor  # Tor never keeps cookies
+    try:
+        if bc.get("cdp_url"):
+            if tor:
+                raise RuntimeError("Tor can't be applied to a browser you attached (browser.cdp_url); start it with "
+                                   f"--proxy-server={tor}, or detach with /browser detach")
+            b = pw.chromium.connect_over_cdp(bc["cdp_url"])
+            context = b.contexts[0] if b.contexts else b.new_context()
+            _S.update(cdp=True, mode=f"your browser at {bc['cdp_url']}")
+        else:
+            kw, headless = _launch_opts(bc, tor, engine)
+            if persistent:
+                d = profile_dir(bc)
+                d.mkdir(parents=True, exist_ok=True)
+                context = kind.launch_persistent_context(str(d), **kw, **_context_opts(tor))
+                b = context.browser
+            else:
+                b = kind.launch(**kw)
+                context = b.new_context(**_context_opts(tor))
+            what = ("headless" if headless else "window") + (f" · {engine}" if engine != "chromium" else "")
+            what += " · logins kept" if persistent else " · private"
+            _S.update(cdp=False, mode=what + (" · via Tor" if tor else ""))
+    except Exception as e:
+        with contextlib.suppress(Exception):
+            pw.stop()
+        _S.clear()
+        if "Executable doesn't exist" in str(e):
+            raise RuntimeError(f"Playwright's {engine} isn't installed: python -m playwright install {engine}") from None
+        if "ProcessSingleton" in str(e) or "SingletonLock" in str(e):
+            raise RuntimeError(f"the lotus profile at {profile_dir(bc)} is in use by another browser; close it first") from None
+        raise
+    _S.update(browser=b, context=context, headless=_S["mode"].startswith("headless"), bc=bc, tor=tor, cfg=cfg,
+              persistent=persistent, engine=engine)
+    _setup(context, bc)
+    pages = context.pages
     _S["page"] = pages[-1] if pages else _new_page()
 
 
-def _new_page():
+def _new_page(context=None):
     _S["opening"] = True
     try:
-        pg = _S["context"].new_page()
+        pg = (context or _S["context"]).new_page()
     finally:
         _S["opening"] = False
     _S["page"] = pg
     return pg
 
 
+def _private_window(bc):
+    """A fresh, isolated window: its own cookies and storage, gone when it closes."""
+    b = _S.get("browser")
+    if b is None or _S.get("persistent"):  # a persistent profile can't host other windows; use a second browser
+        if not _S.get("pbrowser"):
+            engine, kind = _engine(_S["pw"], bc)
+            _S["pbrowser"] = kind.launch(**_launch_opts(bc, _S.get("tor"), engine)[0])
+        b = _S["pbrowser"]
+    context = b.new_context(**_context_opts(_S.get("tor")))
+    _setup(context, bc, private=True)
+    return _new_page(context)
+
+
 def _pages():
-    return [p for p in _S["context"].pages if not p.is_closed()] if _S.get("context") else []
+    if not _S.get("context"):
+        return []
+    out = [p for p in _S["context"].pages if not p.is_closed()]
+    for cx in _S.get("private", []):
+        with contextlib.suppress(Exception):
+            out += [p for p in cx.pages if not p.is_closed()]
+    return out
+
+
+def _is_private(pg):
+    return any(pg.context is cx for cx in _S.get("private", []))
 
 
 def _page(bc):
@@ -420,6 +529,8 @@ def _snapshot(bc, full=True):
     head = f"# {d['title'] or '(untitled)'}\n{d['url']}" + ("  (via Tor)" if _S.get("tor") else "")
     if len(pages) > 1 and pg in pages:
         head += f"   [tab {pages.index(pg) + 1} of {len(pages)}]"
+    if _is_private(pg):
+        head += "   (private window)"
     out = [head]
     events = _S.pop("events", [])
     u = urlparse(d["url"])
@@ -449,7 +560,10 @@ def _snapshot(bc, full=True):
 def _target(pg, target):
     t = str(target).strip().strip("[]")
     if t.isdigit():
-        return pg.locator(f'[data-lotus="{t}"]').first
+        loc = pg.locator(f'[data-lotus="{t}"]')
+        if loc.count() == 0:  # fail now instead of waiting out a timeout
+            raise RuntimeError(f"there is no element [{t}] on this page now; call browser_snapshot for current numbers")
+        return loc.first
     if t.startswith(("css=", "#", ".", "//", "xpath=", "text=")):
         return pg.locator(t).first
     return pg.get_by_text(t, exact=False).first
@@ -474,10 +588,11 @@ def _label(target):
 # ── tools ────────────────────────────────────────────────────────────────────
 
 @tool(pack="browser")
-def browser_open(url: str, new_tab: bool = False, via_tor: bool = False, _ctx=None):
-    """Open a URL in the browser and return the page text and numbered elements. For Tor set via_tor=true (.onion addresses always use Tor); never use third-party "Tor gateway" or proxy websites.
+def browser_open(url: str, new_tab: bool = False, private: bool = False, via_tor: bool = False, _ctx=None):
+    """Open a URL in the browser and return the page text and numbered elements. To search a site, open its search URL directly (e.g. https://www.amazon.com/s?k=water+bottle, https://duckduckgo.com/?q=...) instead of typing into its search box. For Tor set via_tor=true (.onion addresses always use Tor); never use third-party "Tor gateway" or proxy websites.
     url: address to open
     new_tab: open in a new tab instead of the current one
+    private: open in a new private window (its own cookies, nothing kept)
     via_tor: route the browser through Tor (it stays on Tor until closed)"""
     if "://" not in url and not SCHEME_RE.match(url):
         url = safety.with_scheme(url)
@@ -500,7 +615,11 @@ def browser_open(url: str, new_tab: bool = False, via_tor: bool = False, _ctx=No
         _TRUSTED.add(host)
 
     def job():
-        pg = _new_page() if new_tab and _S.get("context") else _page(bc)
+        if private:
+            _page(bc)  # make sure the browser is running (with Tor if asked)
+            pg = _private_window(bc)
+        else:
+            pg = _new_page() if new_tab and _S.get("context") else _page(bc)
         nav = int(bc.get("nav_timeout", 45)) * (2 if bc["_tor"] else 1)  # Tor circuits are slow
         pg.goto(url, wait_until="domcontentloaded", timeout=nav * 1000)
         if _onion(url):
@@ -544,9 +663,14 @@ def browser_type(target: str, text: str, submit: bool = False, _ctx=None):
     target: element number or visible label
     text: text to type
     submit: press Enter after typing"""
+    return _type(target, text, _ctx, submit, batch=False)
+
+
+def _type(target, text, _ctx, submit=False, batch=True):
+    """batch: called from browser_act, whose approval didn't single out sensitive fields."""
     bc = _bc(_ctx)
     t = str(target).strip().strip("[]")
-    if t in (_S.get("secret") or set()) and (_ctx.permission == "auto" or "browser_type" in _ctx.always):
+    if t in (_S.get("secret") or set()) and (batch or _ctx.permission == "auto" or "browser_type" in _ctx.always):
         # passwords and card numbers are never typed without a fresh yes, whatever the permission mode
         if not _ctx.approve("browser_type", f"[{t}] {_label(t)}\nThis is a password or payment field on "
                             f"{_S.get('last', ('?',))[0]}", key="browser_type:secret", force=True):
@@ -681,8 +805,8 @@ def browser_back(_ctx=None):
 
 @tool(pack="browser")
 def browser_tabs(action: str = "list", index: int = 0, _ctx=None):
-    """List, switch to, open or close tabs.
-    action: list, switch, new or close
+    """List, switch to, open or close tabs, or open a private window.
+    action: list, switch, new, private or close
     index: tab number for switch or close (from the list; 0 means the current tab)"""
     bc = _bc(_ctx)
     action = action.lower().strip()
@@ -697,12 +821,19 @@ def browser_tabs(action: str = "list", index: int = 0, _ctx=None):
         if action == "new":
             _new_page()
             return "opened a new empty tab; use browser_open to load a page"
+        if action == "private":
+            _private_window(bc)
+            return "opened a new private window (its own cookies, nothing kept); use browser_open to load a page"
         if action == "switch":
             _S["page"] = pages[i]
             pages[i].bring_to_front()
             return _snapshot(bc)
         if action == "close":
+            cx = pages[i].context if _is_private(pages[i]) else None
             pages[i].close()
+            if cx is not None and not cx.pages:  # last tab of a private window: forget the window entirely
+                cx.close()
+                _S["private"] = [c for c in _S.get("private", []) if c is not cx]
             rest = _pages()
             _S["page"] = rest[min(i, len(rest) - 1)] if rest else None
             if not rest:
@@ -714,7 +845,7 @@ def browser_tabs(action: str = "list", index: int = 0, _ctx=None):
                 title = p.title()[:60]
             except Exception:
                 title = "?"
-            rows.append(f"{'*' if p is cur else ' '} {k}. {title}  {p.url[:80]}")
+            rows.append(f"{'*' if p is cur else ' '} {k}. {title}  {p.url[:80]}" + ("  (private)" if _is_private(p) else ""))
         return "Tabs (* is current):\n" + "\n".join(rows)
     return _run(job)
 
@@ -729,6 +860,69 @@ def browser_screenshot(full_page: bool = False, _ctx=None):
     path = d / f"shot-{time.strftime('%Y%m%d-%H%M%S')}-{int(time.time() * 1000) % 1000:03d}.png"
     _run(lambda: _page(bc).screenshot(path=str(path), full_page=full_page))
     return f"saved {path}. " + _ctx.queue_image(str(path))
+
+
+ACT_HELP = """one action per line:
+  open <url>            click <n>              type <n> <text>
+  select <n> <option>   press <key>            scroll down|up|top|bottom
+  wait <seconds|text>   back"""
+
+
+@tool(pack="browser")
+def browser_act(steps: list, _ctx=None):
+    """Do several browser actions in one call, e.g. ["type 3 water bottle", "press Enter", "click 12"]. Stops at the first step that fails and returns the page after the last step. Saves round trips: use it whenever you already know the next few actions.
+    steps: actions in order: open <url>, click <n>, type <n> <text>, select <n> <option>, press <key>, scroll <down|up|top|bottom>, wait <seconds or text>, back"""
+    import shlex
+    lines = []
+    for item in (steps if isinstance(steps, list) else [steps]):
+        lines += [l.strip() for l in re.split(r"[\n;]+", str(item)) if l.strip()]
+    if not lines:
+        return "error: no steps. " + ACT_HELP
+    if len(lines) > 12:
+        return "error: at most 12 steps per call"
+    if any(l.split()[0].lower() == "type" for l in lines):  # same approval as browser_type
+        typed = "\n".join(l for l in lines if l.split()[0].lower() == "type")
+        if not _ctx.approve("browser_type", typed, key="browser_type"):
+            return "error: the user declined the typing in these steps. Ask them how to proceed."
+    done, last = [], ""
+    for line in lines:
+        verb, _, rest = line.partition(" ")
+        verb, rest = verb.lower(), rest.strip()
+        try:
+            if verb in ("open", "goto", "go"):
+                last = browser_open(rest, _ctx=_ctx)
+            elif verb == "click":
+                last = browser_click(rest, _ctx=_ctx)
+            elif verb in ("type", "fill", "select"):
+                parts = shlex.split(rest) if rest.startswith(('"', "'")) else rest.split(None, 1)
+                if len(parts) < 2:
+                    raise ValueError(f"{verb} needs a target and text")
+                target, text = parts[0], " ".join(parts[1:]) if rest.startswith(('"', "'")) else parts[1]
+                last = browser_select(target, text, _ctx=_ctx) if verb == "select" else _type(target, text, _ctx)
+            elif verb == "press":
+                last = browser_press(rest, _ctx=_ctx)
+            elif verb == "scroll":
+                last = browser_scroll(rest or "down", _ctx=_ctx)
+            elif verb == "wait":
+                last = browser_wait(seconds=int(rest), _ctx=_ctx) if rest.isdigit() else browser_wait(text=rest, _ctx=_ctx)
+            elif verb == "back":
+                last = browser_back(_ctx=_ctx)
+            else:
+                raise ValueError(f"unknown action '{verb}'. " + ACT_HELP)
+        except Interrupted:
+            raise
+        except Exception as e:
+            last = f"error: {e}"
+        if last.startswith("error"):
+            done.append(f"x {line}: {last[7:200]}")
+            break
+        done.append(f"ok {line}")
+    left = len(lines) - len(done)
+    summary = "\n".join(done) + (f"\n({left} later step(s) not run)" if left else "")
+    if last.startswith("error"):
+        with contextlib.suppress(Exception):
+            last = browser_snapshot(_ctx=_ctx)
+    return f"Steps:\n{summary}\n\n{last}"
 
 
 @tool(pack="browser")
@@ -786,7 +980,7 @@ def describe():
                 title = p.title()[:50]
             except Exception:
                 title = "?"
-            rows.append((p is cur, k, title, p.url))
+            rows.append((p is cur, k, ("(private) " if _is_private(p) else "") + title, p.url))
         return _S.get("mode", "?"), rows
     return _run(job, timeout=10)
 

@@ -87,7 +87,7 @@ COMMANDS = [
     ("perm", "[mode]", "approval for tools that change things: ask, auto, readonly", False),
     ("theme", "[mode]", "colors: auto follows the terminal, or dark, light", False),
     ("tor", "[on|off]", "route web tools through Tor", False),
-    ("browser", "[close|show|hide]", "the browser lotus drives: tabs, mode; close it or switch window/headless", False),
+    ("browser", "[option]", "the browser lotus drives: tabs and mode; private/persistent, window, engine, attach", False),
     ("session", "[save|load|list] [name]", "save and resume conversations", False),
     ("recipe", "[name] [input]", "list or run a saved recipe", False),
     ("plugins", "", "loaded plugins and load errors", False),
@@ -108,7 +108,10 @@ ARG_CHOICES = {
     "rem": {"save": "write it now", "clear": "forget where we left off"},
     "note": {"-i": "an instruction for lotus in this project", "-p": "about the project: layout, build, test"},
     "browser": {"close": "close the browser", "show": "use a visible window from the next launch",
-                "hide": "run headless from the next launch"},
+                "hide": "run headless from the next launch", "private": "nothing kept between launches, like incognito",
+                "persistent": "remember logins and cookies between launches", "clear": "wipe the remembered logins",
+                "chromium": "use the Chromium engine", "firefox": "use Playwright's Firefox engine",
+                "attach": "drive a browser you started with remote debugging", "detach": "go back to lotus's own browser"},
 }
 PATH_ARGS = {"image", "file", "ls", "cd", "export"}
 
@@ -778,13 +781,69 @@ def cmd_rem(arg, agent, cfg, ui):
     show_md(ui, rem[0])
 
 
+ATTACH_HELP = """Start a Chromium-based browser with remote debugging and its own profile, then attach:
+  google-chrome --remote-debugging-port=9222 --user-data-dir=$HOME/.lotus/chrome-attach
+  (or chromium, brave-browser, microsoft-edge: same flags)
+  /browser attach            (or /browser attach 9223 for another port)
+Chrome 136+ refuses remote debugging on your everyday profile, hence the separate --user-data-dir.
+Firefox can't be attached this way; use /browser firefox for lotus's own Firefox."""
+
+
 def cmd_browser(arg, cfg, ui):
-    if arg == "close":
+    bc = cfg.setdefault("browser", {})
+    word, _, rest = arg.partition(" ")
+    if word == "close":
         browser.close()
         ui.ok("browser closed")
         return
-    if arg in ("show", "hide"):
-        cfg.setdefault("browser", {})["headless"] = arg == "hide"
+    if word in ("private", "persistent"):
+        bc["profile"] = word
+        browser.close()
+        save_cfg(cfg)
+        ui.ok("private: every launch starts clean and nothing is kept" if word == "private" else
+              f"persistent: logins and cookies are kept in {browser.profile_dir(bc)} (Tor still never keeps them)")
+        return
+    if word == "clear":
+        browser.close()
+        d = browser.profile_dir(bc)
+        if d.exists():
+            shutil.rmtree(d)
+            ui.ok(f"wiped {d}")
+        else:
+            ui.info("no remembered logins to wipe")
+        return
+    if word in ("chromium", "firefox"):
+        bc["engine"] = word
+        browser.close()
+        save_cfg(cfg)
+        ui.ok(f"the browser uses {word} from its next launch")
+        if word == "firefox":
+            ui.info("if it isn't installed yet: python -m playwright install firefox")
+        return
+    if word == "attach":
+        port = rest.strip() or "9222"
+        url = port if port.startswith("http") else f"http://localhost:{port}"
+        import urllib.request
+        try:
+            with urllib.request.urlopen(url + "/json/version", timeout=3) as r:
+                ver = json.loads(r.read()).get("Browser", "a browser")
+        except Exception:
+            ui.warn(f"nothing is listening at {url}")
+            ui.block([c("  " + l, "mist") for l in ATTACH_HELP.splitlines()])
+            return
+        browser.close()
+        bc["cdp_url"] = url
+        save_cfg(cfg)
+        ui.ok(f"attached to {ver} at {url}; lotus opens its tabs there. /browser detach to stop")
+        return
+    if word == "detach":
+        bc["cdp_url"] = ""
+        browser.close()
+        save_cfg(cfg)
+        ui.ok("detached; lotus uses its own browser again")
+        return
+    if word in ("show", "hide"):
+        bc["headless"] = word == "hide"
         browser.close()
         ui.ok(f"the browser will open {'headless' if arg == 'hide' else 'in a window'} next time it's used (this session)")
         return

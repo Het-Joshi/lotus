@@ -28,7 +28,7 @@ RULES = {
     "browser": W.format(
         r"use (?:the|a|my) browser|in (?:the|a) browser|browse to|log ?in(?:to)?|sign ?in|fill (?:in|out)|"
         r"submit (?:the|a) form|click|add to cart|check ?out|book (?:a|the)|screenshot (?:of )?(?:the|this|that) (?:site|page)|"
-        r"\S+\.onion"),
+        r"\S+\.onion|(?:on|at|from) (?:www\.)?[\w-]+\.(?:com|net|org|io|co|ca|co\.uk|de|in)"),
     "research": W.format(
         r"papers?|arxiv|pubmed|preprints?|citations?|cite|bibtex|doi|journals?|peer.reviewed|"
         r"literature|studies|meta.analysis|academic"),

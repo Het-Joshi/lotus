@@ -54,7 +54,7 @@ Or with pip, anywhere, Windows included:
 
 ```bash
 pip install "lotus-agent @ https://github.com/Het-Joshi/lotus/archive/main.tar.gz"
-pip install ".[browser]" && python -m playwright install chromium    # from a clone, with browser control
+pip install ".[browser]" && python -m playwright install chromium    # from a clone, with browser control (includes the stealth Firefox)
 ```
 
 You also need [Ollama](https://ollama.com) running and at least one model (`ollama pull qwen3:4b`). `lotus doctor` checks everything.
@@ -176,7 +176,8 @@ Windows and profiles:
 - **Private by default.** Each launch starts clean, like an incognito window, and nothing is kept.
 - **Persistent:** `/browser persistent` (or `browser.profile: "persistent"`) keeps logins and cookies in `~/.lotus/browser-profile`, so you sign in once. `/browser clear` wipes them, and `/browser private` goes back. Tor never keeps cookies, whatever the setting.
 - **Private windows on demand:** `browser_open(url, private=true)` or `browser_tabs("private")` opens an isolated window with its own cookies, even next to a persistent profile. It's marked `(private)` in the tabs list and forgotten when its last tab closes.
-- **Engine:** `/browser firefox` uses Playwright's Firefox (`python -m playwright install firefox` once); `/browser chromium` switches back. Under Tor, Firefox resolves names inside Tor and has WebRTC switched off entirely.
+- **Engine:** the default is [invisible_playwright](https://github.com/feder-cr/invisible_playwright), a Firefox whose fingerprint (screen, GPU, fonts, canvas, timezone and more) is set inside the engine's C++ rather than injected into pages, so sites see an ordinary browser and show far fewer bot checks. It's free and open source (MIT wrapper, MPL-2.0 browser), needs Python 3.11+, and its ~250 MB browser downloads in the background the first time (or run `python -m invisible_playwright fetch`). Until then, or if it won't start, Playwright's Chromium is used and lotus says so. "Headless" still renders a real window, on a hidden virtual display (Xvfb on Linux), so the fingerprint stays coherent. A persistent profile keeps the same fingerprint every launch. `/browser cloak` uses [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) instead, a patched Chromium (`pip install cloakbrowser`; its free build lags the paid one and may not be redistributed). `browser.humanize` adds human-like mouse paths for sites that watch behaviour. `/browser chromium` uses plain Chromium, `/browser firefox` Playwright's Firefox (`python -m playwright install firefox` once), `/browser invisible` switches back. Under Tor, Firefox resolves names inside Tor and has WebRTC switched off entirely.
+- **Searching sites:** `browser_search_site(query, site)` opens the site, finds its own search box (opening a search icon if needed), types the query and submits it, so the model never has to know or guess a site's search URL. Opening a guessed address that returns 404 tells the model to do this instead.
 - **A browser you start yourself:** launch a Chromium-based browser with remote debugging and its own profile, then `/browser attach`:
 
   ```bash
@@ -333,7 +334,8 @@ Load with `/tools mcp:fs`, or let the model call `load_tools("mcp:fs")`. Tools f
 | `safe_browsing.google_api_key` | "" | Also check Google Safe Browsing. |
 | `safe_browsing.ignore` | [] | Sites never to flag. |
 | `browser.profile` | private | `private`: nothing kept between launches. `persistent`: remember logins in `~/.lotus/browser-profile`. |
-| `browser.engine` | chromium | `chromium` or `firefox` (Playwright's build). |
+| `browser.engine` | invisible | `invisible` (stealth Firefox from `invisible-playwright`), `cloak` (stealth Chromium from `cloakbrowser`), `chromium` or `firefox` (Playwright's builds). |
+| `browser.humanize` | false | With a stealth engine: human-like mouse paths (with `cloak`, typing and scrolling too). Slower; for sites that watch behaviour. |
 | `browser.allow` / `browser.block` | [] | Sites the browser may (or may never) open, e.g. `["wikipedia.org"]`. Subdomains count. |
 | `browser.confirm_risky` | true | Ask before clicking buy / send / delete / submit-like buttons. |
 | `browser.dialogs` | dismiss | What to do with `confirm()` / `prompt()` dialogs: `dismiss` or `accept`. |

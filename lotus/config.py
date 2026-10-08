@@ -38,7 +38,9 @@ DEFAULTS = {
     },
     "browser": {
         "profile": "private",     # private: nothing kept, like incognito; persistent: remember logins (~/.lotus/browser-profile)
-        "engine": "chromium",     # chromium or firefox (python -m playwright install firefox)
+        "engine": "invisible",    # invisible (stealth Firefox, pip install invisible-playwright), cloak (stealth Chromium,
+                                  # pip install cloakbrowser), or Playwright's chromium / firefox
+        "humanize": False,        # stealth engines: human-like mouse paths (and with cloak typing, scrolling); slower
         "executable": "",         # a Chromium-based browser to launch instead, e.g. /usr/bin/brave-browser
         "headless": None,         # None: a window when there's a display, headless otherwise
         "cdp_url": "",            # e.g. http://localhost:9222 to drive your own Chrome

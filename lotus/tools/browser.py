@@ -1,4 +1,9 @@
-"""Browser control through Playwright (optional: pip install playwright && python -m playwright install chromium).
+"""Browser control through Playwright (optional: pip install playwright invisible-playwright).
+
+The default engine is invisible_playwright, a Firefox with its fingerprint set in the engine's
+C++ source, so sites see an ordinary browser and show far fewer bot checks (browser.engine: cloak
+uses CloakBrowser's patched Chromium instead). Both hand back ordinary Playwright objects, so
+everything below works the same; without them, Playwright's Chromium is used.
 
 Pages are shown to the model as text plus numbered interactive elements, e.g.
   [3] button Sign in
@@ -40,7 +45,7 @@ from . import Interrupted, pack, tool
 from .. import safety
 from ..config import home
 
-pack("browser", "drive a real web browser (Tor and .onion capable): open, read, click, type, tabs, screenshot")
+pack("browser", "drive a real (stealth) web browser, Tor capable: open sites, search them, click, type, tabs, screenshot")
 
 _S = {}  # browser state; only touched on the browser thread (reads from elsewhere are harmless)
 
@@ -355,6 +360,9 @@ def _stop():
             _S["pw"].stop()
     except Exception:
         pass
+    for ip in _S.get("sessions", []):  # invisible_playwright: its Playwright and virtual display
+        with contextlib.suppress(Exception):
+            ip.__exit__(None, None, None)
     _S.clear()
 
 
@@ -431,20 +439,119 @@ def _proxy(ctx):
     return "socks5://" + hp
 
 
-def _engine(pw, bc):
-    name = (bc.get("engine") or "chromium").lower()
-    if name not in ("chromium", "firefox"):
-        raise RuntimeError(f"browser.engine must be chromium or firefox, not {name!r}")
-    return name, getattr(pw, name)
+_STEALTH = {}  # per engine: whether the user was told it isn't ready, and its download thread
+
+def _invisible_ready():
+    from invisible_core.download import engine_status
+    return engine_status()[0]
 
 
-def _launch_opts(bc, tor, engine):
+def _invisible_fetch():
+    from invisible_core.download import ensure_binary
+    ensure_binary()
+
+
+def _cloak_ready_bin():
+    import cloakbrowser
+    return bool(os.environ.get("CLOAKBROWSER_BINARY_PATH")) or cloakbrowser.binary_info()["installed"]
+
+
+def _cloak_fetch():
+    import cloakbrowser
+    cloakbrowser.ensure_binary()
+
+
+# the stealth engines: pip package, what it is, download size, is its browser on disk?, download it
+STEALTH = {
+    "invisible": ("invisible-playwright", "invisible_playwright, a patched Firefox", "~250 MB", _invisible_ready, _invisible_fetch),
+    "cloak": ("cloakbrowser", "CloakBrowser, a patched Chromium", "~200 MB", _cloak_ready_bin, _cloak_fetch),
+}
+
+
+def _stealth_ready(name):
+    """Is this stealth engine's browser on disk? If not, its download starts in the background
+    (once) and lotus uses Playwright's Chromium until it's done, saying so."""
+    pkg, what, size, ready, fetch = STEALTH[name]
+    st = _STEALTH.setdefault(name, {})
+    try:
+        if ready():
+            return True
+    except ImportError:
+        if not st.get("told"):
+            st["told"] = True
+            _event(f"using plain Chromium, which sites detect as automated more often; pip install {pkg} for the "
+                   f"stealth browser ({what})")
+        return False
+    except Exception:
+        pass
+    if not st.get("fetching"):
+        def job():
+            with contextlib.suppress(Exception):
+                fetch()
+        st["fetching"] = threading.Thread(target=job, daemon=True)
+        st["fetching"].start()
+        _event(f"the stealth browser ({what}, {size}) is downloading in the background; until it's ready this "
+               "session uses plain Chromium, so some sites may show bot checks")
+    return False
+
+
+def _engine(bc):
+    """The engine to launch: invisible (patched Firefox, the default), cloak (patched Chromium),
+    or Playwright's own chromium / firefox."""
+    name = (bc.get("engine") or "invisible").lower()
+    if name not in ("invisible", "cloak", "chromium", "firefox"):
+        raise RuntimeError(f"browser.engine must be invisible, cloak, chromium or firefox, not {name!r}")
+    if name in STEALTH and (bc.get("executable") or bc.get("channel") or not _stealth_ready(name)):
+        name = "chromium"  # a browser the user picked wins; no stealth binary yet means plain Chromium
+    return name
+
+
+def _kind(pw, engine):
+    return getattr(pw, "firefox" if engine == "firefox" else "chromium")
+
+
+TOR_FIREFOX_PREFS = {"network.proxy.socks_remote_dns": True, "media.peerconnection.enabled": False,
+                     "network.dns.disablePrefetch": True, "network.http.http3.enable": False,
+                     "browser.send_pings": False}
+
+
+def _invisible(bc, tor, headless, profile=None):
+    """Launch invisible_playwright's Firefox. It brings its own Playwright client and fingerprint
+    (viewport, screen, locale, timezone all consistent with one another) and returns ordinary
+    Playwright objects, so the rest of this file drives it unchanged: a Browser, or for a
+    persistent profile its BrowserContext."""
+    from invisible_playwright import InvisiblePlaywright
+    seed = None
+    if profile:  # the same fingerprint every launch for a profile that keeps its logins
+        f = profile / ".lotus-seed"
+        try:
+            seed = int(f.read_text().strip())
+        except (OSError, ValueError):
+            import secrets
+            seed = secrets.randbits(31)
+            with contextlib.suppress(OSError):
+                f.write_text(str(seed))
+    ip = InvisiblePlaywright(seed, headless=headless, proxy={"server": tor} if tor else None,
+                             humanize=bool(bc.get("humanize")), show_cursor=False,
+                             locale="en-US" if tor else "auto", timezone="UTC" if tor else "",
+                             extra_prefs=TOR_FIREFOX_PREFS if tor else None, profile_dir=profile)
+    got = ip.__enter__()
+    _S.setdefault("sessions", []).append(ip)  # closed by _stop: it owns its own Playwright and display
+    return got
+
+
+def _headless(bc):
+    h = bc.get("headless")
+    if h is None:  # a window when there's a display to show it on
+        h = sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return h
+
+
+def _launch_opts(bc, tor, engine, profile=None):
     """Options for launching a browser (and for a persistent profile, which takes both kinds)."""
-    headless = bc.get("headless")
-    if headless is None:
-        headless = sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    headless = _headless(bc)
     kw = {"headless": headless}
-    if engine == "chromium":
+    if engine in ("chromium", "cloak"):
         kw["args"] = []
         if bc.get("channel"):
             kw["channel"] = bc["channel"]  # "chrome" or "msedge" to use an installed browser
@@ -453,7 +560,7 @@ def _launch_opts(bc, tor, engine):
     if tor:
         kw["proxy"] = {"server": tor}
         proxy_host = tor.split("://")[-1].rsplit(":", 1)[0]
-        if engine == "chromium":
+        if engine in ("chromium", "cloak"):
             kw["args"] += [
                 # no DNS outside the proxy; only the proxy itself is reached directly
                 f"--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE {proxy_host} , EXCLUDE localhost",
@@ -462,14 +569,27 @@ def _launch_opts(bc, tor, engine):
                 "--disable-quic", "--dns-prefetch-disable", "--no-pings",
             ]
         else:
-            kw["firefox_user_prefs"] = {"network.proxy.socks_remote_dns": True, "media.peerconnection.enabled": False,
-                                        "network.dns.disablePrefetch": True, "network.http.http3.enable": False,
-                                        "browser.send_pings": False}
+            kw["firefox_user_prefs"] = dict(TOR_FIREFOX_PREFS)
+    if engine == "cloak":
+        from cloakbrowser import build_args, ensure_binary
+        from cloakbrowser.config import IGNORE_DEFAULT_ARGS, persistent_seed_args
+        args = kw["args"]
+        if profile:  # the same fingerprint every time for a profile that keeps its logins
+            args = persistent_seed_args(profile, True, args)
+        kw["args"] = build_args(True, args, headless=headless,
+                                timezone="UTC" if tor else None, locale="en-US" if tor else None)
+        kw["executable_path"] = ensure_binary()
+        kw["ignore_default_args"] = IGNORE_DEFAULT_ARGS  # e.g. --enable-automation, which gives a bot away
     return kw, headless
 
 
-def _context_opts(tor):
-    o = {"viewport": {"width": 1280, "height": 900}, "accept_downloads": True}
+def _context_opts(tor, engine="chromium", headless=True):
+    if engine == "invisible":
+        return {"accept_downloads": True}  # its own fingerprint sets viewport, locale and timezone to match
+    if engine == "cloak" and not headless:
+        o = {"no_viewport": True, "accept_downloads": True}  # page size matches the real window, as in a normal browser
+    else:
+        o = {"viewport": {"width": 1280, "height": 900}, "accept_downloads": True}
     if tor:
         o.update(locale="en-US", timezone_id="UTC")  # like Tor Browser: don't give away where you are
     return o
@@ -481,6 +601,12 @@ def _setup(context, bc, private=False):
     sb_on = safety._cfg(cfg)["enabled"]
     if bc.get("allow") or bc.get("block") or sb_on:
         def guard(route):
+            try:
+                _guard(route)
+            except Exception:  # the browser closed with requests in flight: nothing left to route
+                pass
+
+        def _guard(route):
             req = route.request
             if req.is_navigation_request():
                 host = urlparse(req.url).hostname
@@ -502,6 +628,10 @@ def _setup(context, bc, private=False):
         _S["page"] = p
 
     context.on("page", adopt)
+    if _S.get("engine") == "cloak" and bc.get("humanize"):
+        # curved mouse paths, typing key by key and wheel scrolling, for sites that watch behaviour
+        from cloakbrowser.human import patch_context, resolve_config
+        patch_context(context, resolve_config("default"))
     with contextlib.suppress(Exception):
         context.add_init_script(OBSERVE_JS)
     for p in context.pages:
@@ -510,20 +640,22 @@ def _setup(context, bc, private=False):
         _S.setdefault("private", []).append(context)
 
 
-def profile_dir(bc):
-    return home() / "browser-profile" / (bc.get("engine") or "chromium").lower()
+def profile_dir(bc, engine=None):
+    return home() / "browser-profile" / (engine or _S.get("engine") or bc.get("engine") or "invisible").lower()
 
 
 def _launch(bc):
     tor, cfg = bc.get("_tor"), bc.get("_cfg")
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        raise RuntimeError("browser tools need Playwright: pip install playwright && python -m playwright install chromium")
-    pw = sync_playwright().start()
-    _S["pw"] = pw
-    engine, kind = _engine(pw, bc)
+    engine = "chromium" if bc.get("cdp_url") else _engine(bc)
     persistent = (bc.get("profile") or "private") == "persistent" and not tor  # Tor never keeps cookies
+    pw = None
+    if engine != "invisible":  # it brings its own Playwright
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            raise RuntimeError("browser tools need Playwright: pip install playwright && python -m playwright install chromium")
+        pw = sync_playwright().start()
+        _S["pw"] = pw
     try:
         if bc.get("cdp_url"):
             if tor:
@@ -533,26 +665,43 @@ def _launch(bc):
             context = b.contexts[0] if b.contexts else b.new_context()
             _S.update(cdp=True, mode=f"your browser at {bc['cdp_url']}")
         else:
-            kw, headless = _launch_opts(bc, tor, engine)
-            if persistent:
-                d = profile_dir(bc)
+            d = profile_dir(bc, engine) if persistent else None
+            if d:
                 d.mkdir(parents=True, exist_ok=True)
-                context = kind.launch_persistent_context(str(d), **kw, **_context_opts(tor))
-                b = context.browser
+            headless = _headless(bc)
+            if engine == "invisible":
+                got = _invisible(bc, tor, headless, profile=d)
+                b, context = (None, got) if persistent else (got, got.new_context(**_context_opts(tor, engine, headless)))
             else:
-                b = kind.launch(**kw)
-                context = b.new_context(**_context_opts(tor))
-            what = ("headless" if headless else "window") + (f" · {engine}" if engine != "chromium" else "")
+                kw, headless = _launch_opts(bc, tor, engine, profile=d)
+                kind = _kind(pw, engine)
+                if persistent:
+                    context = kind.launch_persistent_context(str(d), **kw, **_context_opts(tor, engine, headless))
+                    b = context.browser
+                else:
+                    b = kind.launch(**kw)
+                    context = b.new_context(**_context_opts(tor, engine, headless))
+            what = ("headless" if headless else "window") + {
+                "invisible": " · stealth firefox", "cloak": " · stealth chromium", "chromium": ""}.get(engine, f" · {engine}")
             what += " · logins kept" if persistent else " · private"
             _S.update(cdp=False, mode=what + (" · via Tor" if tor else ""))
     except Exception as e:
-        with contextlib.suppress(Exception):
-            pw.stop()
+        for ip in _S.get("sessions", []):
+            with contextlib.suppress(Exception):
+                ip.__exit__(None, None, None)
+        if pw:
+            with contextlib.suppress(Exception):
+                pw.stop()
         _S.clear()
+        if engine in STEALTH:
+            # a stealth browser that won't start shouldn't take browsing down with it
+            _launch(dict(bc, engine="chromium"))
+            _event(f"the stealth browser ({engine}) didn't start, so this session uses plain Chromium: {_tidy(e)[:200]}")
+            return
         if "Executable doesn't exist" in str(e):
             raise RuntimeError(f"Playwright's {engine} isn't installed: python -m playwright install {engine}") from None
         if "ProcessSingleton" in str(e) or "SingletonLock" in str(e):
-            raise RuntimeError(f"the lotus profile at {profile_dir(bc)} is in use by another browser; close it first") from None
+            raise RuntimeError(f"the lotus profile at {profile_dir(bc, engine)} is in use by another browser; close it first") from None
         raise
     _S.update(browser=b, context=context, headless=_S["mode"].startswith("headless"), bc=bc, tor=tor, cfg=cfg,
               persistent=persistent, engine=engine)
@@ -576,10 +725,15 @@ def _private_window(bc):
     b = _S.get("browser")
     if b is None or _S.get("persistent"):  # a persistent profile can't host other windows; use a second browser
         if not _S.get("pbrowser"):
-            engine, kind = _engine(_S["pw"], bc)
-            _S["pbrowser"] = kind.launch(**_launch_opts(bc, _S.get("tor"), engine)[0])
+            engine = _S.get("engine", "chromium")
+            if engine == "invisible":
+                # a second invisible_playwright session can't share this thread with the first
+                raise RuntimeError("the stealth Firefox can't open a private window next to a persistent profile; "
+                                   "open it as a normal tab, or switch with /browser private")
+            else:
+                _S["pbrowser"] = _kind(_S["pw"], engine).launch(**_launch_opts(bc, _S.get("tor"), engine)[0])
         b = _S["pbrowser"]
-    context = b.new_context(**_context_opts(_S.get("tor")))
+    context = b.new_context(**_context_opts(_S.get("tor"), _S.get("engine", "chromium"), _S.get("headless", True)))
     _setup(context, bc, private=True)
     return _new_page(context)
 
@@ -627,6 +781,38 @@ def _settle(pg, quick=False):
     pg.wait_for_timeout(200)  # unlike time.sleep, this lets Playwright deliver events (popups, dialogs)
     if _S.get("page") is not pg and _S.get("page") is not None:  # a click opened a popup
         _settle(_S["page"], quick=True)
+
+
+def _wait_content(pg, secs=8):
+    """Script-heavy pages can be "loaded" with nothing drawn yet; give them a few seconds to show
+    some text or controls before reading them."""
+    with contextlib.suppress(Exception):
+        pg.wait_for_function("() => document.body && (document.body.innerText.trim().length > 80 || "
+                             "document.querySelectorAll('a[href],button,input').length > 3)", timeout=secs * 1000)
+    # anti-flicker snippets (Google Optimize's "async-hide") keep the page invisible until an A/B
+    # script loads; when that script is blocked the page stays blank, so lift the curtain ourselves
+    with contextlib.suppress(Exception):
+        hid = pg.evaluate("() => { const h = document.documentElement, was = h.classList.contains('async-hide'); "
+                          "h.classList.remove('async-hide'); return was; }")
+        if hid:
+            pg.wait_for_timeout(500)  # the page shows on the next style pass, not at once
+
+
+def _ride_out_check(pg, secs=15):
+    """A "Just a moment..." bot check often clears by itself within seconds for a browser that
+    looks real. Wait for that before showing the model a block page."""
+    end = time.monotonic() + secs
+    while True:
+        try:
+            title = pg.title()
+            text = pg.evaluate("() => (document.body && document.body.innerText || '').slice(0, 3000)")
+        except Exception:
+            return
+        if not safety.is_challenge(title, text) or time.monotonic() > end:
+            return
+        pg.wait_for_timeout(1000)
+        with contextlib.suppress(Exception):
+            pg.wait_for_load_state("domcontentloaded", timeout=3000)
 
 
 def _save_downloads():
@@ -874,7 +1060,7 @@ def _label(target):
 
 @tool(pack="browser")
 def browser_open(url: str, new_tab: bool = False, private: bool = False, via_tor: bool = False, _ctx=None):
-    """Open a URL in the browser and return the page text and numbered elements. To search a site, open its search URL directly (e.g. https://www.amazon.com/s?k=water+bottle, https://duckduckgo.com/?q=...) instead of typing into its search box. For Tor set via_tor=true (.onion addresses always use Tor); never use third-party "Tor gateway" or proxy websites.
+    """Open a URL in the browser and return the page text and numbered elements. Only open addresses you know or saw (from the user, a page or web_search); never guess deep or search URLs. To find something on a site, open its home page (e.g. bestbuy.com) and call browser_search_site, then click through results. For Tor set via_tor=true (.onion addresses always use Tor); never use third-party "Tor gateway" or proxy websites.
     url: address to open
     new_tab: open in a new tab instead of the current one
     private: open in a new private window (its own cookies, nothing kept)
@@ -906,12 +1092,111 @@ def browser_open(url: str, new_tab: bool = False, private: bool = False, via_tor
         else:
             pg = _new_page() if new_tab and _S.get("context") else _page(bc)
         nav = int(bc.get("nav_timeout", 45)) * (2 if bc["_tor"] else 1)  # Tor circuits are slow
-        pg.goto(url, wait_until="domcontentloaded", timeout=nav * 1000)
+        resp = pg.goto(url, wait_until="domcontentloaded", timeout=nav * 1000)
+        if resp is not None and (resp.status in (404, 410) or resp.status >= 500):
+            _event(f"this address returned HTTP {resp.status}: it doesn't exist (a guessed URL?). Don't guess another; "
+                   f"open the site's home page and use browser_search_site, or follow links on the page")
         if _onion(url):
             _S["onion"] = True
         _settle(pg)
+        _wait_content(pg)
+        _ride_out_check(pg)
         return _snapshot(bc)
     return _run(job, timeout=int(bc.get("nav_timeout", 45)) * 2 + 30)
+
+
+# Find the page's own search box, so the model never has to know (or guess) a site's search URL
+FIND_SEARCH_JS = r"""
+() => {
+  for (const a of ['data-lotus-search', 'data-lotus-search-go', 'data-lotus-search-toggle'])
+    for (const e of document.querySelectorAll('[' + a + ']')) e.removeAttribute(a);
+  const shown = e => { const r = e.getBoundingClientRect(), s = getComputedStyle(e);
+    return r.width > 2 && r.height > 2 && s.visibility !== 'hidden' && s.display !== 'none' && !e.disabled; };
+  const cls = e => typeof e.className === 'string' ? e.className : '';
+  const BAD = /e-?mail|pass|login|sign.?in|user|zip|postal|phone|coupon|promo|newsletter|subscri|first.?name|last.?name|address|city|card|comment|message/;
+  let best = null, top = 0;
+  for (const e of document.querySelectorAll('input, textarea, [role=searchbox], [role=combobox], [contenteditable=true]')) {
+    const t = (e.getAttribute('type') || 'text').toLowerCase();
+    if (e.tagName === 'INPUT' && !['text', 'search'].includes(t)) continue;
+    const w = [e.name, e.id, e.placeholder, e.getAttribute('aria-label'), e.title, cls(e), e.getAttribute('data-testid'),
+               e.form && e.form.getAttribute('action'), e.form && e.form.id].join(' ').toLowerCase();
+    let s = 0;
+    if (t === 'search' || e.getAttribute('role') === 'searchbox') s += 6;
+    if (e.closest('[role=search], search, form[action*=search], form[action*=find]')) s += 4;
+    if (/search|query|keyword|find|look.?up/.test(w)) s += 4;
+    if (['q', 'k', 's', 'st', 'query', 'search', 'keyword', 'keywords', 'term', 'text'].includes((e.name || '').toLowerCase())) s += 3;
+    if (BAD.test(w)) s -= 8;
+    s += shown(e) ? 2 : -3;
+    if (e.getBoundingClientRect().top < 250) s += 1;  // search boxes live in the header
+    if (s > top) { top = s; best = e; }
+  }
+  if (best && top >= 5 && shown(best)) {
+    best.setAttribute('data-lotus-search', '1');
+    const go = best.form && best.form.querySelector('button[type=submit], input[type=submit], button:not([type])');
+    if (go) go.setAttribute('data-lotus-search-go', '1');
+    return {found: true, label: (best.placeholder || best.getAttribute('aria-label') || best.name || '').trim().slice(0, 60)};
+  }
+  // no box on show: a search icon or link usually opens one
+  for (const e of document.querySelectorAll('button, a, [role=button], summary, label')) {
+    if (!shown(e)) continue;
+    const w = [e.getAttribute('aria-label'), e.title, e.textContent.slice(0, 80), cls(e), e.id, e.getAttribute('data-testid')].join(' ').toLowerCase();
+    if (/\b(search|find)\b|search-?(icon|toggle|button|trigger)/.test(w) && !/research|advanced search/.test(w)) {
+      e.setAttribute('data-lotus-search-toggle', '1');
+      return {found: false, toggle: true};
+    }
+  }
+  return {found: false, toggle: false};
+}
+"""
+
+
+@tool(pack="browser")
+def browser_search_site(query: str, site: str = "", _ctx=None):
+    """Search a website with its own search box, the way a person would: finds the box (opening a search icon if needed), types the query and submits it, then returns the results page. Use this to find items on shops and other sites instead of guessing search URLs.
+    query: what to search for, e.g. 'rtx 5060 laptop'
+    site: the site to search, e.g. 'bestbuy.com'; empty searches the page that is open now"""
+    if site:
+        want = (urlparse(safety.with_scheme(site) if "://" not in site else site).hostname or "").removeprefix("www.")
+        here = (urlparse((_S.get("last") or ("",))[0]).hostname or "").removeprefix("www.")
+        if not here or not (here == want or here.endswith("." + want)):
+            res = browser_open(site, _ctx=_ctx)
+            if res.startswith("error"):
+                return res
+    elif not _S.get("context"):
+        return "error: no page is open; give site= (e.g. 'bestbuy.com') or browser_open one first"
+    bc = _bc(_ctx)
+
+    def job():
+        pg = _page(bc)
+        _wait_content(pg)
+        found = pg.evaluate(FIND_SEARCH_JS)
+        for _ in range(2):  # a search icon may open the box, or lead to a search page
+            if found.get("found") or not found.get("toggle"):
+                break
+            pg.locator("[data-lotus-search-toggle]").first.click(timeout=int(bc.get("timeout", 10)) * 1000)
+            _settle(pg, quick=True)
+            pg.wait_for_timeout(500)
+            found = pg.evaluate(FIND_SEARCH_JS)
+        host = urlparse(pg.url).hostname or "this page"
+        if not found.get("found"):
+            return (f"error: couldn't find a search box on {host}. Look in browser_snapshot for a search link or icon "
+                    "and click it, or browse the site's menus and categories. Don't guess search URLs.")
+        box = pg.locator("[data-lotus-search]").first
+        _flash(box)
+        before = pg.url
+        box.click(timeout=int(bc.get("timeout", 10)) * 1000)
+        box.fill(query, timeout=int(bc.get("timeout", 10)) * 1000)
+        box.press("Enter")
+        _settle(pg)
+        _ride_out_check(pg)
+        go = pg.locator("[data-lotus-search-go]")
+        if pg.url == before and go.count():  # Enter did nothing: press the form's search button
+            with contextlib.suppress(Exception):
+                go.first.click(timeout=3000)
+                _settle(pg)
+        how = f" (box: {found['label']})" if found.get("label") else ""
+        return f"Searched {host} for {query!r} with its own search box{how}.\n\n" + _snapshot(bc)
+    return _run(job, timeout=int(bc.get("nav_timeout", 45)) + 60)
 
 
 @tool(pack="browser")
@@ -1194,13 +1479,13 @@ def browser_screenshot(full_page: bool = False, target: str = "", _ctx=None):
 ACT_HELP = """one action per line:
   open <url>            click <n>              type <n> <text>
   select <n> <option>   press <key>            scroll down|up|top|bottom
-  wait <seconds|text>   back"""
+  wait <seconds|text>   back                   search <query> (the site's own search box)"""
 
 
 @tool(pack="browser")
 def browser_act(steps: list, _ctx=None):
     """Do several browser actions in one call, e.g. ["type 3 water bottle", "press Enter", "click 12"]. Stops at the first step that fails and returns the page after the last step. Saves round trips: use it whenever you already know the next few actions.
-    steps: actions in order: open <url>, click <n>, type <n> <text>, select <n> <option>, press <key>, scroll <down|up|top|bottom>, wait <seconds or text>, back"""
+    steps: actions in order: open <url>, search <query>, click <n>, type <n> <text>, select <n> <option>, press <key>, scroll <down|up|top|bottom>, wait <seconds or text>, back"""
     lines = []
     for item in (steps if isinstance(steps, list) else [steps]):
         lines += [l.strip() for l in re.split(r"[\n;]+", str(item)) if l.strip()]
@@ -1251,6 +1536,8 @@ def _steps(lines, done, _ctx):
                 last = browser_wait(seconds=int(rest), _ctx=_ctx) if rest.isdigit() else browser_wait(text=rest, _ctx=_ctx)
             elif verb == "back":
                 last = browser_back(_ctx=_ctx)
+            elif verb == "search":
+                last = browser_search_site(rest, _ctx=_ctx)
             else:
                 raise ValueError(f"unknown action '{verb}'. " + ACT_HELP)
         except Interrupted:

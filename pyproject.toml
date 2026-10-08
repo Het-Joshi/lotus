@@ -20,7 +20,7 @@ Source = "https://github.com/Het-Joshi/lotus"
 Issues = "https://github.com/Het-Joshi/lotus/issues"
 
 [project.optional-dependencies]
-browser = ["playwright>=1.40"]
+browser = ["playwright>=1.40", "invisible-playwright>=0.27; python_version >= '3.11'"]
 
 [project.scripts]
 lotus = "lotus.cli:main"

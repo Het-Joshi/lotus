@@ -133,7 +133,9 @@ class Agent:
         if "web_search" in T.TOOLS:
             s += ("\nFor anything on the internet (current facts, news, prices, products, shopping, docs) use "
                   "web_search, then fetch_url to read results")
-            s += (", and browser_open only when you must click or type on a site." if not self.depth and "browser_open" in T.TOOLS
+            s += (". To look something up on one site (a shop, a forum), or when fetch_url is blocked, use the browser: "
+                  "browser_open its home page, browser_search_site, then click results. Never guess deep or search URLs."
+                  if not self.depth and "browser_search_site" in T.TOOLS
                   else ".")
             s += " Never start a browser or guess search commands with shell: you can't see what they show."
         if not self.native:

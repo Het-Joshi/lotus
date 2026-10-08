@@ -110,7 +110,9 @@ ARG_CHOICES = {
     "browser": {"close": "close the browser", "show": "use a visible window from the next launch",
                 "hide": "run headless from the next launch", "private": "nothing kept between launches, like incognito",
                 "persistent": "remember logins and cookies between launches", "clear": "wipe the remembered logins",
-                "chromium": "use the Chromium engine", "firefox": "use Playwright's Firefox engine",
+                "invisible": "use the stealth Firefox (fewer bot checks)", "cloak": "use CloakBrowser's stealth Chromium",
+                "chromium": "use Playwright's plain Chromium",
+                "firefox": "use Playwright's Firefox engine",
                 "attach": "drive a browser you started with remote debugging", "detach": "go back to lotus's own browser"},
 }
 PATH_ARGS = {"image", "file", "ls", "cd", "export"}
@@ -812,13 +814,16 @@ def cmd_browser(arg, cfg, ui):
         else:
             ui.info("no remembered logins to wipe")
         return
-    if word in ("chromium", "firefox"):
+    if word in ("invisible", "cloak", "chromium", "firefox"):
         bc["engine"] = word
         browser.close()
         save_cfg(cfg)
         ui.ok(f"the browser uses {word} from its next launch")
         if word == "firefox":
             ui.info("if it isn't installed yet: python -m playwright install firefox")
+        if word in ("invisible", "cloak"):
+            pkg, what, size = browser.STEALTH[word][:3]
+            ui.info(f"needs pip install {pkg}; {what} ({size}) downloads on first use")
         return
     if word == "attach":
         port = rest.strip() or "9222"

@@ -110,6 +110,8 @@ esac
 if [ "$BROWSER" = 1 ]; then
   say "installing Chromium for browser control"
   "$ENV_PY" -m playwright install chromium >/dev/null || note "Chromium didn't install; run: $ENV_PY -m playwright install chromium"
+  say "installing the stealth browser (a patched Firefox, ~250 MB)"
+  "$ENV_PY" -m invisible_playwright fetch >/dev/null 2>&1 || note "the stealth browser didn't install (it needs Python 3.11+); lotus uses plain Chromium until you run: $ENV_PY -m invisible_playwright fetch"
 fi
 
 # ── after ────────────────────────────────────────────────────────────────────

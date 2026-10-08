@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>lotus · a local agent for Ollama</title>
-<meta name="description" content="A lightweight agent harness for Ollama, built to work with small local models. One file to install, no dependencies.">
+<meta name="description" content="A local agent for Ollama that fits small models: files, shell, web and a real browser, with Tor and .onion support and safe browsing. No API keys, no dependencies.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text x='0' y='13' font-size='14' fill='%23c2477f'>❀</text></svg>">
 <style>
   :root {
@@ -136,6 +136,16 @@ stopping it only affects local testing.
   <span class="b">✿</span> <span class="p">vichāra</span> <span class="m">· reflecting · 2s · esc to stop</span>
   <span class="m">╰ qwen3:4b   2.1k in · 46 out   38 tok/s   4.2s</span>   <span class="b">❀❀</span><span class="m">······ 18% of 16k</span></pre>
 
+  <h2>Things your agent probably can't do</h2>
+  <dl>
+    <dt>Browse onions</dt><dd><code>/tor on</code> sends the browser, search and page reading through Tor, and any <code>.onion</code> address switches over by itself. DNS stays inside Tor, WebRTC can't leak your IP, QUIC is off. Tested against check.torproject.org and a real WebRTC probe.</dd>
+    <dt>Dodge phishing</dt><dd>Pages are checked against live malware and phishing lists before they load. Hidden "ignore your instructions" text is flagged. Passwords and card numbers need your yes even in auto mode, and <code>.exe</code> downloads are refused.</dd>
+    <dt>Stop looping</dt><dd>Small reasoning models think in circles. lotus notices, cuts it off, and gets the answer anyway.</dd>
+    <dt>Work while you sleep</dt><dd><code>lotus watch onion-watch --every 30m --notify</code> checks your hidden services and pings your desktop.</dd>
+    <dt>See and draw</dt><dd>Attach a screenshot and a text-only model hands it to a vision model. Charts, trees and tables render in the terminal.</dd>
+    <dt>No strings</dt><dd>No API keys, no telemetry, no dependencies, no cloud. Works in a pipe and over SSH.</dd>
+  </dl>
+
   <h2>Why it exists</h2>
   <p>Most agent harnesses are built for frontier models and then pointed at Ollama. On a small local model they break quietly:</p>
   <ul>
@@ -189,7 +199,11 @@ stopping it only affects local testing.
       "read @server.log and tell me why the API died at 3am.",
       "research the three best note-taking apps in parallel and pick one for me.",
       "figure out why my laptop sounds like a jet engine.",
-      "explain this regex to me like I'm five, then fix it."
+      "explain this regex to me like I'm five, then fix it.",
+      "over Tor, open the DuckDuckGo onion and find privacy-focused email providers.",
+      "check my .onion site every 30 minutes and ping me the second it dies.",
+      "is this link safe? bit.ly/free-iphone-claim",
+      "look at @screenshot.png and tell me why the build failed."
     ];
     var list = document.getElementById("prompt-list");
     prompts.forEach(function (p) { var li = document.createElement("li"); li.textContent = "lotus, " + p; list.appendChild(li); });

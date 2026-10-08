@@ -214,6 +214,8 @@ def shell(command: str, timeout: int = 120, _ctx=None):
             _ctx.cwd = str(target.resolve())
             return f"cwd is now {_ctx.cwd}"
         return f"error: no such directory {target}"
+    if GUI_BROWSER.search(command):
+        return "error: not run. " + _web_hint(_ctx)
     sh = _ctx.cfg.get("shell") or None
     if sh and "powershell" in sh.lower():
         args, use_shell = [sh, "-NoProfile", "-Command", command], False
@@ -222,7 +224,29 @@ def shell(command: str, timeout: int = 120, _ctx=None):
     else:
         args, use_shell = command, True
     out, note = _run_proc(args, use_shell, _ctx.cwd, timeout, getattr(_ctx, "cancel", None))
+    if note == "exit 127":  # command not found: usually a made-up CLI standing in for a missing tool
+        out += "\nThat command isn't installed; don't guess others, use a tool from the packs in your instructions."
+        if "web_search" in TOOLS:
+            out += " For the web: call web_search(query), then fetch_url(url)."
     return f"{out.rstrip()}\n[{note}]"
+
+
+# a GUI browser started from shell opens a window the model can't see or read
+GUI_BROWSER = re.compile(
+    r"(?:^|[;&|(]\s*)(?:(?:timeout\s+\S+|nohup|setsid|exec|env(?:\s+\w+=\S+)*)\s+)*"
+    r"(?:\S*/)?(?:firefox(?:-esr)?|chromium(?:-browser)?|google-chrome(?:-stable)?|brave(?:-browser)?|"
+    r"microsoft-edge(?:-stable)?|librewolf|opera|vivaldi)(?=\s|$|[;&|)])")
+
+
+def _web_hint(ctx):
+    s = "A browser started from shell opens a window you can't see or read."
+    if "web_search" in TOOLS:
+        s += " To look something up call web_search(query), then fetch_url(url) to read a result."
+    if "browser_open" in TOOLS and not getattr(ctx, "depth", 0):
+        s += " To click or type on a site call browser_open(url), then browser_snapshot."
+    if "open_path" in TOOLS:
+        s += " To show the user a page in their own browser call open_path(url)."
+    return s
 
 
 def _kill(p):
@@ -328,6 +352,8 @@ def load_tools(pack: str, _ctx=None):
     """Turn on a tool pack so its tools become available. The system prompt lists the packs.
     pack: pack name"""
     p = pack.strip().lower()
+    if p in TOOLS and p not in PACKS:  # load_tools("web_search") means its pack
+        p = TOOLS[p].pack
     if p.startswith("mcp:") or p in _ctx.cfg.get("mcp", {}):
         from .. import mcp
         name = p.split(":", 1)[-1]
@@ -340,7 +366,11 @@ def load_tools(pack: str, _ctx=None):
         return "error: only the main agent can drive the browser"
     _ctx.active.add(p)
     sigs = [signature(t) for t in pack_tools(p)]
-    return f"pack '{p}' loaded:\n" + "\n".join(sigs)
+    out = f"pack '{p}' loaded:\n" + "\n".join(sigs)
+    idle = _ctx.idle_packs() if hasattr(_ctx, "idle_packs") else []
+    if idle:
+        out += "\nIf none of these fit the task, load another pack: " + ", ".join(idle)
+    return out
 
 
 @tool(params={"items": {"type": "array", "items": {"type": "string"},

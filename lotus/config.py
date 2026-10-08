@@ -13,19 +13,19 @@ DEFAULTS = {
     "show_thinking": True,
     "theme": "auto",              # auto (follow the terminal background) | dark | light
     "tool_mode": "auto",          # auto | native | text
-    "packs": ["core", "render"],  # tool packs active at start; others load on demand
+    "packs": ["core", "render", "web"],  # tool packs active at start; others load on demand
     "ctx_max": 32768,             # never ask Ollama for more than this (protects RAM/VRAM)
     "ctx_min": 4096,
     "reserve_tokens": 2048,       # room kept free for the reply
     "tool_output_share": 0.2,     # max share of the window one tool result may take
-    "max_steps": 15,
+    "max_steps": 25,              # tool steps per turn; research needs search + several reads
     "think_budget": "auto",       # tokens of reasoning per step before it's cut short; auto scales with /think, 0 = no limit
     "max_output_tokens": 0,       # cap on one reply (Ollama num_predict); 0 = the model's default
     "repeat_penalty": None,       # e.g. 1.1 if a model keeps repeating itself; None = the model's default
     "temperature": None,
     "keep_alive": "30m",
     "shell": "",                  # e.g. "powershell" or "/bin/zsh"; empty = system default
-    "subagents": {"parallel": 2, "max_steps": 8},
+    "subagents": {"parallel": 2, "max_steps": 12},
     "search": {"engine": "duckduckgo", "searxng_url": ""},
     "tor": {"enabled": False, "proxy": "socks5h://127.0.0.1:9050"},  # also routes the browser when on
     "safe_browsing": {

@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 from . import pack, tool
 from .. import safety
 
-pack("web", "search the web and read pages (Tor optional)")
+pack("web", "search the web and read pages: current facts, news, prices, products, docs (Tor optional)")
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 

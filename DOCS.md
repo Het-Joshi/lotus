@@ -315,7 +315,8 @@ Load with `/tools mcp:fs`, or let the model call `load_tools("mcp:fs")`. Tools f
 |---|---|---|
 | `ctx_max` | 32768 | Largest `num_ctx` lotus will request. Lower it on 8 GB machines, raise it for long agent runs. |
 | `ctx_min` | 4096 | Smallest `num_ctx`. |
-| `packs` | core, render | Packs active at start. |
+| `packs` | core, render, web | Packs active at start. Web is on so current-information questions go straight to search. |
+| `max_steps` | 25 | Tool steps per turn (sub-agents: `subagents.max_steps`, 12). |
 | `tool_mode` | auto | `native`, `text`, or `auto` (native when the model reports the tools capability). |
 | `tool_output_share` | 0.2 | Largest share of the window one tool result may take before it is paged. |
 | `vision_model` | "" | Model used for images when the current one can't see. Empty means pick an installed one. |

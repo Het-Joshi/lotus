@@ -13,7 +13,11 @@ Control:
   (unless permission is auto). browser.allow / browser.block limit which sites it may open.
 - Dialogs are handled (alerts accepted, confirms dismissed and reported), popups become the
   current tab, downloads are saved to ~/.lotus/downloads.
-- After an action, the page text is only resent if it changed, which keeps small contexts small.
+- Element numbers stay with their element while the page is open. After an action on the same
+  page, only what changed is sent: new and vanished text, new, changed and removed elements, and
+  what an in-page observer saw (dialogs, alerts, menus, toasts that came and went). It's the
+  model's eyes on the page at a fraction of a screenshot's cost; browser_wait watches over time and
+  browser_screenshot(target="changed") crops an image to just the part that changed.
 - Safe browsing (see safety.py): known malware and phishing pages are blocked before they
   load, page text is marked as untrusted and checked for prompt injection, passwords and
   card numbers always need approval, and programs are never downloaded.
@@ -22,6 +26,7 @@ Control:
 import atexit
 import concurrent.futures
 import contextlib
+import difflib
 import fnmatch
 import os
 import queue
@@ -45,11 +50,13 @@ RISKY = re.compile(r"\b(buy|purchase|pay|checkout|check out|place order|order no
 
 SNAP_JS = r"""
 (opts) => {
-  document.querySelectorAll('[data-lotus]').forEach(e => e.removeAttribute('data-lotus'));
+  // numbers stay with their element for the life of the document, so "[12]" means the same
+  // button before and after a click, and a snapshot can be compared with the previous one
+  const refs = window.__lotusRefs || (window.__lotusRefs = {n: 0, doc: Math.random().toString(36).slice(2)});
   const sel = 'a[href],button,input:not([type=hidden]),textarea,select,summary,[onclick],[contenteditable=""],[contenteditable=true],' +
     '[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=radio],[role=switch],[role=option],[role=combobox],[role=textbox]';
-  const vh = innerHeight, out = [], labels = {}, secret = [], hrefs = {};
-  let n = 0, more = 0, dupes = 0;
+  const vh = innerHeight, items = [], secret = [], hrefs = {}, used = new Set();
+  let count = 0, more = 0, dupes = 0;
   for (const e of document.querySelectorAll(sel)) {
     const r = e.getBoundingClientRect(), st = getComputedStyle(e);
     if (r.width < 2 || r.height < 2 || st.visibility === 'hidden' || st.display === 'none' || st.opacity === '0') continue;
@@ -65,8 +72,12 @@ SNAP_JS = r"""
         dupes++; continue;
       }
     }
-    if (r.bottom < -vh || r.top > vh * 3 || n >= opts.max) { more++; continue; }
-    n++; e.setAttribute('data-lotus', String(n));
+    // numbered even when not listed, so one that scrolls into range later isn't mistaken for a new one
+    let n = +e.getAttribute('data-lotus') || 0;
+    if (!n || used.has(n)) { n = ++refs.n; e.setAttribute('data-lotus', String(n)); }  // new, or cloned with its number
+    used.add(n);
+    if (r.bottom < -vh || r.top > vh * 3 || count >= opts.max) { more++; continue; }
+    count++;
     const tag = e.tagName.toLowerCase();
     let kind = tag === 'input' ? 'input:' + (e.type || 'text') : (e.getAttribute('role') || tag);
     const field = tag === 'input' || tag === 'textarea' || tag === 'select';
@@ -95,28 +106,153 @@ SNAP_JS = r"""
         /card.?number|cvv|cvc|security code|expir|iban|routing|account number|ssn|social security|\bpin\b|passcode/.test(ident))) {
       bits.push('sensitive'); secret.push(n);
     }
-    if (r.top > vh || r.bottom < 0) bits.push('offscreen');
     if (tag === 'a') { try { const u = new URL(e.href); label += '  -> ' + (u.host === location.host ? '' : u.host) + u.pathname.slice(0, 50); } catch (x) {} }
-    labels[n] = kind + ' ' + label;
-    out.push('[' + n + '] ' + kind + ' ' + label + (bits.length ? '  (' + bits.join(', ') + ')' : ''));
-    if (key) hrefs[key] = {i: out.length - 1, words: label.toLowerCase(), extra: [], label, kind, n, bits};
+    items.push([n, kind + ' ' + label, bits, r.top > vh || r.bottom < 0]);
+    if (key) hrefs[key] = {i: items.length - 1, words: label.toLowerCase(), extra: [], label, kind};
   }
   for (const k in hrefs) {  // rewrite merged entries: "[1] a No. / Reply / Click here  -> /t/1"
     const h = hrefs[k];
     if (!h.extra.length) continue;
     const [text, arrow] = h.label.split('  -> ');
-    const merged = [text].concat(h.extra).filter(Boolean).join(' / ').slice(0, 90) + (arrow ? '  -> ' + arrow : '');
-    labels[h.n] = h.kind + ' ' + merged;
-    out[h.i] = '[' + h.n + '] ' + h.kind + ' ' + merged + (h.bits.length ? '  (' + h.bits.join(', ') + ')' : '');
+    items[h.i][1] = h.kind + ' ' + [text].concat(h.extra).filter(Boolean).join(' / ').slice(0, 90) + (arrow ? '  -> ' + arrow : '');
   }
+  const alive = Array.from(document.querySelectorAll('[data-lotus]'), e => +e.getAttribute('data-lotus'));
   const body = document.body, main = document.querySelector('main, [role=main], article');
   const useMain = main && main.innerText.trim().length > 400;
   let text = ((useMain ? main : body) || {innerText: ''}).innerText.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   const sh = Math.max(document.documentElement.scrollHeight, body ? body.scrollHeight : 0);
-  return {title: document.title, url: location.href, elements: out, labels, secret, dupes, text: text.slice(0, opts.chars), total: text.length,
-          main: !!useMain, more, scroll: sh > vh ? Math.round(100 * scrollY / Math.max(1, sh - vh)) : 100,
+  return {title: document.title, url: location.href, doc: refs.doc, top: refs.n, items, alive, secret, dupes, text: text.slice(0, opts.keep),
+          total: text.length, main: !!useMain, more, scroll: sh > vh ? Math.round(100 * scrollY / Math.max(1, sh - vh)) : 100,
           screens: Math.max(1, Math.round(sh / vh * 10) / 10)};
 }
+"""
+
+# Watches the page between looks, so the model hears about what changed (a dialog opened,
+# an error appeared, a toast came and went, a menu was shown) without a screenshot or a
+# full re-read. Runs in every page from load on; costs nothing while the page is still.
+OBSERVE_JS = r"""
+(() => {
+  if (window.__lotusObs) return;
+  const POP = 'dialog,[role=dialog],[role=alertdialog],[aria-modal=true],[role=alert],[role=status],[aria-live=polite],' +
+              '[aria-live=assertive],[role=menu],[role=listbox],[role=tooltip],[popover]';
+  let log = [], since = performance.now(), last = 0, muts = 0, dropped = 0, rect = null, timer = null, on = false;
+  let added = [], attrs = [], live = new Set();
+  const vis = new WeakMap(), logged = new WeakMap();
+  const clean = s => (s || '').replace(/\s+/g, ' ').trim();
+  const shown = e => {
+    if (!e.isConnected) return false;
+    if (e.checkVisibility) return e.checkVisibility({opacityProperty: true, visibilityProperty: true});
+    const r = e.getBoundingClientRect(); return r.width > 1 && r.height > 1;
+  };
+  const role = e => {
+    const r = e.getAttribute('role'), live = e.getAttribute('aria-live');
+    if (e.tagName === 'DIALOG' || r === 'dialog' || r === 'alertdialog' || e.getAttribute('aria-modal') === 'true') return 'dialog';
+    if (r === 'alert' || live === 'assertive') return 'alert';
+    if (r === 'status' || live === 'polite') return 'status';
+    if (r === 'menu' || r === 'listbox' || r === 'tooltip') return r;
+    if (e.hasAttribute('popover')) return 'popup';
+    return '';
+  };
+  const kindOf = e => {
+    const own = role(e); if (own) return own;
+    const up = e.parentElement && e.parentElement.closest(POP); if (up) return 'in ' + role(up);
+    const st = getComputedStyle(e);
+    return (st.position === 'fixed' || st.position === 'sticky') && +st.zIndex > 0 ? 'popup' : '';
+  };
+  const grow = e => {
+    const r = e.getBoundingClientRect(); if (r.width < 2 || r.height < 2) return;
+    const b = {x: r.left + scrollX, y: r.top + scrollY, r: r.right + scrollX, b: r.bottom + scrollY};
+    rect = rect ? {x: Math.min(rect.x, b.x), y: Math.min(rect.y, b.y), r: Math.max(rect.r, b.r), b: Math.max(rect.b, b.b)} : b;
+  };
+  const note = (what, e, kind, text) => {
+    if (log.length >= 60) { dropped++; return; }
+    const ev = {t: Math.round(performance.now() - since), what, kind, text: text.slice(0, 160), el: e ? new WeakRef(e) : null};
+    log.push(ev); if (e) logged.set(e, ev);
+  };
+  const flush = () => {
+    timer = null;
+    const roots = added.filter(e => e.isConnected && !added.some(o => o !== e && o.isConnected && o.contains(e)));
+    added = [];
+    for (const e of roots.slice(0, 25)) {
+      const v = shown(e); vis.set(e, v);
+      if (!v || !clean(e.textContent)) continue;
+      const text = clean(e.innerText); if (!text) continue;
+      note('appeared', e, kindOf(e), text); grow(e);
+    }
+    for (const [e, name, old] of attrs.splice(0, 40)) {
+      if (!e.isConnected) continue;
+      const v = shown(e);
+      let was = vis.get(e);
+      if (was === undefined) {
+        if (name === 'hidden' || name === 'aria-hidden') was = name === 'hidden' ? old === null : old !== 'true';
+        else if (name === 'open') was = old !== null;
+        else if (e.matches(POP)) was = false;  // a dialog or menu shown by class/style
+        else { vis.set(e, v); continue; }
+      }
+      vis.set(e, v);
+      if (v === was) continue;
+      const seen = logged.get(e);  // what was hidden is only news if we saw it shown
+      const text = v ? clean(e.innerText) : seen ? seen.text : '';
+      if (!text) continue;
+      note(v ? 'shown' : 'hidden', e, kindOf(e), text); if (v) grow(e);
+    }
+    for (const e of live) {  // text updates inside live regions: "3 results", "Saved", form errors
+      if (!e.isConnected) continue;
+      const text = clean(e.innerText);
+      const prev = logged.get(e);
+      if (text && (!prev || prev.text !== text.slice(0, 160))) { note('updated', e, role(e) || 'status', text); grow(e); }
+    }
+    live.clear();
+  };
+  const obs = new MutationObserver(list => {
+    if (!on) return;
+    muts += list.length; last = performance.now();
+    for (const m of list) {
+      if (m.type === 'childList') {
+        for (const n of m.addedNodes) {
+          if (n.nodeType === 1) added.length < 200 && added.push(n);
+          else if (n.nodeType === 3 && m.target.closest) { const l = m.target.closest(POP); if (l) live.add(l); }
+        }
+        for (const n of m.removedNodes) {  // only things worth knowing: popups, and what we saw appear
+          if (n.nodeType !== 1) continue;
+          const ev = logged.get(n), kind = ev ? ev.kind : role(n);
+          if (ev && !ev.sent) ev.gone = true;  // came and went before anyone looked
+          else if (kind && !kind.startsWith('in ') && (ev || vis.get(n) !== false)) {
+            const text = ev ? ev.text : clean(n.textContent); if (text) note('closed', null, kind, text);
+          }
+        }
+        if (m.target.nodeType === 1 && m.target.closest) { const l = m.target.closest(POP); if (l) live.add(l); }
+      } else if (m.type === 'characterData') {
+        const p = m.target.parentElement, l = p && p.closest(POP); if (l) live.add(l);
+      } else attrs.length < 200 && attrs.push([m.target, m.attributeName, m.oldValue]);
+    }
+    if (!timer) timer = setTimeout(flush, 150);
+  });
+  const start = () => {
+    if (on) return; on = true;
+    obs.observe(document, {childList: true, subtree: true, characterData: true, attributes: true, attributeOldValue: true,
+                           attributeFilter: ['hidden', 'open', 'aria-hidden', 'class', 'style']});
+  };
+  // what loads with the page isn't news (the first look reads it all), so start once it has loaded
+  if (document.readyState === 'complete') start(); else addEventListener('load', start, {once: true});
+  setTimeout(start, 4000);
+  window.__lotusObs = {
+    take() {
+      if (timer) { clearTimeout(timer); flush(); }
+      log.forEach(ev => { ev.sent = true; });
+      const out = log.map(ev => {
+        const e = ev.el && ev.el.deref();
+        const gone = ev.gone || (ev.what !== 'hidden' && ev.what !== 'closed' && e && !shown(e));
+        return {t: ev.t, what: ev.what, kind: ev.kind, text: ev.text, gone: !!gone};
+      });
+      const res = {events: out, dropped, muts, rect, quiet: Math.round(performance.now() - Math.max(last, since))};
+      log = []; dropped = 0; muts = 0; rect = null; since = performance.now();
+      return res;
+    },
+    quiet() { return Math.round(performance.now() - last); },
+    box() { if (timer) { clearTimeout(timer); flush(); } return rect; },
+  };
+})()
 """
 
 FIND_JS = r"""
@@ -366,6 +502,8 @@ def _setup(context, bc, private=False):
         _S["page"] = p
 
     context.on("page", adopt)
+    with contextlib.suppress(Exception):
+        context.add_init_script(OBSERVE_JS)
     for p in context.pages:
         _wire(p, bc)
     if private:
@@ -510,21 +648,145 @@ def _save_downloads():
             _event(f"a download failed: {_tidy(e)}")
 
 
-def _snapshot(bc, full=True):
+def _take(pg):
+    """What the page's observer saw since the last look. Also installs it in pages that were
+    open before lotus wired the window (an attached browser) or that load without it."""
+    try:
+        return pg.evaluate("() => { " + OBSERVE_JS + "; return window.__lotusObs.take(); }")
+    except Exception:
+        return None
+
+
+def _lines(text):
+    return [ln.strip() for ln in text.split("\n") if ln.strip()]
+
+
+def _el(n, label, bits, off=False):
+    bits = list(bits) + (["offscreen"] if off else [])
+    return f"[{n}] {label}" + (f"  ({', '.join(bits)})" if bits else "")
+
+
+def _clip(s, n=160):
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
+def _event_lines(events, timed):
+    """The observer's events in words. Untimed (after an action), only popups and things that
+    came and went: the text diff already covers text that is simply new or gone."""
+    out, seen = [], set()
+    for ev in events:
+        kind, what, gone = ev["kind"], ev["what"], ev["gone"]
+        if not timed and not kind and not gone:
+            continue
+        key = (what, kind, ev["text"])
+        if key in seen:
+            continue
+        seen.add(key)
+        if gone and what in ("appeared", "shown", "updated"):
+            what = ("showed" if what == "updated" else what) + " and went away again"
+        if kind.startswith("in "):
+            line = f"{what} {kind}"
+        else:
+            line = f"{kind} {what}" if kind else what
+        out.append((f"+{ev['t'] / 1000:.1f}s " if timed else "") + f'{line}: "{_clip(ev["text"])}"')
+    return out
+
+
+def _text_diff(old, new):
+    sm = difflib.SequenceMatcher(None, old, new, autojunk=len(old) > 2000)
+    add, rem = [], []
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op in ("replace", "delete"):
+            rem += old[i1:i2]
+        if op in ("replace", "insert"):
+            add += new[j1:j2]
+    moved = set(add) & set(rem)  # reordered, not changed
+    return [x for x in add if x not in moved], [x for x in rem if x not in moved]
+
+
+def _capped(prefix, lines, budget):
+    out, used = [], 0
+    for i, ln in enumerate(lines):
+        ln = _clip(ln, 200)
+        if used + len(ln) > budget and out:
+            out.append(f"  …and {len(lines) - i} more line(s)")
+            break
+        out.append(f"  {prefix} {ln}")
+        used += len(ln)
+    return out
+
+
+def _changes(base, view, d, events, timed):
+    """What changed between the last look and now, in a few lines, or None if it's too much
+    to be worth listing (then the whole page is sent instead)."""
+    out = _event_lines(events, timed)
+    shown = " ".join(e["text"].lower() for e in events)
+    add, rem = _text_diff(base["lines"], view["lines"])
+    add = [x for x in add if x.lower()[:50] not in shown]
+    rem = [x for x in rem if x.lower()[:50] not in shown]
+    budget = int(base.get("chars", 4000)) // 3
+    if add:
+        out.append("new text:")
+        out += _capped("+", add, budget)
+    if rem:
+        out.append("text gone:")
+        out += _capped("-", rem, budget // 2)
+    old, now, alive = base["items"], view["items"], set(d["alive"])
+    new = [n for n in now if n not in old and n > base["top"]]
+    into = [n for n in now if n not in old and n <= base["top"]]
+    changed = [n for n in now if n in old and old[n][:2] != now[n][:2]]
+    removed = [n for n in old if n not in now and n not in alive]
+    away = [n for n in old if n not in now and n in alive]
+    for word, ids, cap in (("new", new, 15), ("now listed", into, 15)):
+        if ids:
+            out.append(f"{word}: " + ("" if len(ids) == 1 else "\n  ") +
+                       "\n  ".join(_el(n, *now[n]) for n in ids[:cap]) + (f"\n  …and {len(ids) - cap} more" if len(ids) > cap else ""))
+    for n in changed[:10]:
+        was = old[n][1] if old[n][0] == now[n][0] else None
+        out.append(f"now: {_el(n, *now[n])}  (was " + (", ".join(was) or "plain" if was is not None else old[n][0]) + ")")
+    if removed:
+        out.append("gone: " + ", ".join(f"[{n}] {_clip(old[n][0], 40)}" for n in removed[:8]) +
+                   (f" …and {len(removed) - 8} more" if len(removed) > 8 else ""))
+    if away:
+        out.append(f"{len(away)} element(s) no longer listed (hidden, or scrolled out of range); their numbers still work if they come back")
+    return out
+
+
+def _snapshot(bc, full=True, timed=False):
+    """The page as the model sees it. full=False after an action: on the same page, only what
+    changed since the model's last look is sent (with element numbers kept), which is far
+    smaller than the page and says plainly when an action did nothing."""
     pg = _page(bc)
     _save_downloads()
-    opts = {"max": int(bc.get("max_elements", 120)), "chars": int(bc.get("max_text", 4000))}
+    chars = int(bc.get("max_text", 4000))
+    opts = {"max": int(bc.get("max_elements", 120)), "keep": max(chars, 60000)}
+    obs = _take(pg)
     d = pg.evaluate(SNAP_JS, opts)
     if _S.get("page") is not pg and _S.get("page") is not None:  # a popup took over while we were reading
         pg = _S["page"]
         _settle(pg, quick=True)
+        obs = _take(pg)
         d = pg.evaluate(SNAP_JS, opts)
         full = True
-    _S["labels"] = d["labels"]
+    _S["labels"] = {str(n): label for n, label, *_ in d["items"]}
     _S["secret"] = {str(n) for n in d.get("secret", [])}
-    key = (d["url"], hash(d["text"]))
-    same = _S.get("last") == key
-    _S["last"] = key
+    _S["last"] = (d["url"],)
+    if obs and obs.get("rect"):
+        _S["rect"] = (d["doc"], obs["rect"])
+    act = _S.get("act")  # inside browser_act: compare with the page before the first step, and keep every event
+    base = act["base"] if act is not None else _S.get("view")
+    view = {"page": pg, "doc": d["doc"], "url": d["url"].split("#")[0], "lines": _lines(d["text"]), "chars": chars,
+            "items": {n: (label, tuple(bits), off) for n, label, bits, off in d["items"]}, "top": d["top"]}
+    _S["view"] = view
+    events = _S.pop("events", [])
+    seen = (obs or {}).get("events", [])
+    if (obs or {}).get("dropped"):
+        seen.append({"t": 0, "what": "appeared", "kind": "", "text": f"(and {obs['dropped']} more changes)", "gone": False})
+    if act is not None:
+        act["notes"] += events
+        act["seen"] += seen
+        events, seen = list(act["notes"]), list(act["seen"])
+
     pages = _pages()
     head = f"# {d['title'] or '(untitled)'}\n{d['url']}" + ("  (via Tor)" if _S.get("tor") else "")
     if len(pages) > 1 and pg in pages:
@@ -532,26 +794,49 @@ def _snapshot(bc, full=True):
     if _is_private(pg):
         head += "   (private window)"
     out = [head]
-    events = _S.pop("events", [])
     u = urlparse(d["url"])
     if u.scheme == "http" and not (u.hostname or "").endswith(".onion") and u.hostname not in ("localhost", "127.0.0.1"):
         events.append("this page isn't encrypted (http); don't enter anything private here")
-    if safety.is_challenge(d["title"], d["text"]):
+    if safety.is_challenge(d["title"], d["text"][:chars]):
         events.append("this is a bot check / captcha page, which sites often show to Tor and automated browsers. "
                       "Don't try to solve it. Try another page on the same site (e.g. a subdomain or a deeper link), "
                       "or call browser_handoff so the user can solve it in a window")
     if events:
         out.append("\n".join("Note: " + e for e in events))
-    if same and not full:
-        out.append("(page text unchanged since the last snapshot)")
-    else:
-        body = d["text"] or "(no text on the page)"
-        if d["total"] > len(d["text"]):
-            body += f"\n[showing the first {len(d['text'])} of {d['total']} chars; browser_find('words') searches the rest]"
-        warn = safety.guard_text(d["text"])
-        out.append(safety.UNTRUSTED + ("\n" + warn if warn else "") + "\n" + ("(main content)\n" if d["main"] else "") + body)
     pos = f"scrolled {d['scroll']}% of ~{d['screens']} screens" if d["screens"] > 1.1 else "the whole page fits on screen"
-    els = "\n".join(d["elements"]) or "(none)"
+
+    same = (base is not None and base["page"] is pg and base["doc"] == d["doc"] and base["url"] == view["url"])
+    if not full and same and _S.get("diffs", 0) < 8:
+        lines = _changes(base, view, d, seen, timed)
+        if lines:
+            fresh = "\n".join(lines)
+            warn = safety.guard_text(fresh)
+            fresh = safety.UNTRUSTED + ("\n" + warn if warn else "") + "\nWhat changed since your last look:\n" + fresh
+        else:
+            fresh = ("Nothing visible changed since your last look: no new text, popups or element changes. The action "
+                     "may have done nothing, or the page is still working (browser_wait watches it).")
+        diff = "\n\n".join(out + [fresh, f"Other elements are as listed before ({len(d['items'])} in range; {pos}). "
+                                          "browser_snapshot lists them all again."])
+        whole = _whole(out, d, chars, pos, _event_lines(seen, timed))
+        if not lines or len(diff) < 0.7 * len(whole):
+            _S["diffs"] = _S.get("diffs", 0) + 1
+            return diff
+        _S["diffs"] = 0
+        return whole
+    _S["diffs"] = 0
+    return _whole(out, d, chars, pos, _event_lines(seen, timed))
+
+
+def _whole(out, d, chars, pos, happened):
+    text = d["text"][:chars]
+    body = text or "(no text on the page)"
+    if d["total"] > len(text):
+        body += f"\n[showing the first {len(text)} of {d['total']} chars; browser_find('words') searches the rest]"
+    warn = safety.guard_text(text + "\n".join(happened))
+    if happened:
+        body = "Seen on the page since your last look:\n" + "\n".join(happened) + "\n\n" + body
+    out = out + [safety.UNTRUSTED + ("\n" + warn if warn else "") + "\n" + ("(main content)\n" if d["main"] else "") + body]
+    els = "\n".join(_el(n, label, bits, off) for n, label, bits, off in d["items"]) or "(none)"
     more = f"\n…and {d['more']} more further down (scroll to see them)" if d["more"] else ""
     out.append(f"Interactive elements ({pos}; use the number with browser_click / browser_type):\n{els}{more}")
     return "\n\n".join(out)
@@ -767,26 +1052,40 @@ def browser_find(text: str, _ctx=None):
 
 @tool(pack="browser")
 def browser_wait(text: str = "", seconds: int = 5, _ctx=None):
-    """Wait for text to appear on the page (or just wait a few seconds), then re-read it. Useful while a page is still loading.
-    text: text to wait for; empty waits for the page to settle
+    """Watch the page until text appears, or until it stops changing, then report what happened meanwhile with timings: new text, dialogs, alerts, messages that came and went. Use it while a page loads, a reply streams in, or after an action that seemed to do nothing. Much cheaper than screenshots.
+    text: text to wait for; empty waits until the page settles
     seconds: longest wait"""
     bc = _bc(_ctx)
     seconds = max(1, min(int(seconds), 30))
 
     def job():
         pg = _page(bc)
-        note = ""
-        if text:
+        with contextlib.suppress(Exception):
+            pg.evaluate(OBSERVE_JS)
+        t0 = time.monotonic()
+        found = False
+        while time.monotonic() - t0 < seconds:
             try:
-                pg.get_by_text(text, exact=False).first.wait_for(timeout=seconds * 1000)
-            except Exception:
-                note = f"'{text}' did not appear within {seconds}s.\n\n"
-        else:
-            try:
-                pg.wait_for_load_state("networkidle", timeout=seconds * 1000)
-            except Exception:
+                if text:
+                    found = pg.evaluate("q => (document.body ? document.body.innerText : '').toLowerCase().includes(q)",
+                                        text.lower())
+                    if found:
+                        break
+                elif time.monotonic() - t0 > 0.8 and pg.evaluate(
+                        "() => window.__lotusObs ? window.__lotusObs.quiet() : 1e9") > 800:
+                    break  # nothing has changed for a moment: settled
+            except Exception:  # navigating; the next look reads the new page
                 pass
-        return note + _snapshot(bc)
+            pg.wait_for_timeout(250)
+        took = time.monotonic() - t0
+        if text and not found:
+            note = f"'{text}' did not appear within {seconds}s.\n\n"
+        elif text:
+            note = f"'{text}' appeared after {took:.1f}s.\n\n"
+        else:
+            note = (f"The page settled after {took:.1f}s.\n\n" if took < seconds
+                    else f"The page was still changing after {seconds}s.\n\n")
+        return note + _snapshot(bc, full=False, timed=True)
     return _run(job, timeout=seconds + 30)
 
 
@@ -851,15 +1150,43 @@ def browser_tabs(action: str = "list", index: int = 0, _ctx=None):
 
 
 @tool(pack="browser")
-def browser_screenshot(full_page: bool = False, _ctx=None):
-    """Take a screenshot. With a vision model it is attached so you can see the page.
-    full_page: capture the whole page instead of the viewport"""
+def browser_screenshot(full_page: bool = False, target: str = "", _ctx=None):
+    """Take a screenshot. With a vision model it is attached so you can see the page. Prefer the text snapshot; when you do need to look, a target keeps the image small.
+    full_page: capture the whole page instead of the viewport
+    target: an element number to capture just that element, or "changed" for only the part of the page that changed last"""
     bc = _bc(_ctx)
     d = home() / "shots"
     d.mkdir(exist_ok=True)
     path = d / f"shot-{time.strftime('%Y%m%d-%H%M%S')}-{int(time.time() * 1000) % 1000:03d}.png"
-    _run(lambda: _page(bc).screenshot(path=str(path), full_page=full_page))
-    return f"saved {path}. " + _ctx.queue_image(str(path))
+    t = str(target or "").strip().strip("[]").lower()
+
+    def job():
+        pg = _page(bc)
+        if t == "changed":
+            r = None
+            with contextlib.suppress(Exception):
+                r = pg.evaluate("() => window.__lotusObs ? window.__lotusObs.box() : null")
+            if not r:
+                doc = None
+                with contextlib.suppress(Exception):
+                    doc = pg.evaluate("() => window.__lotusRefs && window.__lotusRefs.doc")
+                r = _S["rect"][1] if _S.get("rect") and _S["rect"][0] == doc else None
+            if not r:
+                pg.screenshot(path=str(path))
+                return "nothing has been seen changing on this page, so this is the whole screen"
+            pad = 12
+            x, y = max(0, r["x"] - pad), max(0, r["y"] - pad)
+            clip = {"x": x, "y": y, "width": min(r["r"] + pad - x, 2000), "height": min(r["b"] + pad - y, 2000)}
+            pg.screenshot(path=str(path), full_page=True, clip=clip)
+            return f"the area that changed ({int(clip['width'])}x{int(clip['height'])})"
+        if t:
+            loc = _target(pg, t)
+            loc.screenshot(path=str(path), timeout=int(bc.get("timeout", 10)) * 1000)
+            return f"element [{t}] {_label(t)}".rstrip()
+        pg.screenshot(path=str(path), full_page=full_page)
+        return "the whole page" if full_page else "the screen"
+    what = _run(job)
+    return f"saved {path} ({what}). " + _ctx.queue_image(str(path))
 
 
 ACT_HELP = """one action per line:
@@ -872,7 +1199,6 @@ ACT_HELP = """one action per line:
 def browser_act(steps: list, _ctx=None):
     """Do several browser actions in one call, e.g. ["type 3 water bottle", "press Enter", "click 12"]. Stops at the first step that fails and returns the page after the last step. Saves round trips: use it whenever you already know the next few actions.
     steps: actions in order: open <url>, click <n>, type <n> <text>, select <n> <option>, press <key>, scroll <down|up|top|bottom>, wait <seconds or text>, back"""
-    import shlex
     lines = []
     for item in (steps if isinstance(steps, list) else [steps]):
         lines += [l.strip() for l in re.split(r"[\n;]+", str(item)) if l.strip()]
@@ -884,7 +1210,23 @@ def browser_act(steps: list, _ctx=None):
         typed = "\n".join(l for l in lines if l.split()[0].lower() == "type")
         if not _ctx.approve("browser_type", typed, key="browser_type"):
             return "error: the user declined the typing in these steps. Ask them how to proceed."
-    done, last = [], ""
+    done = []
+    _run(lambda: _S.__setitem__("act", {"base": _S.get("view"), "notes": [], "seen": []}))
+    try:
+        last = _steps(lines, done, _ctx)
+    finally:
+        _S.pop("act", None)
+    left = len(lines) - len(done)
+    summary = "\n".join(done) + (f"\n({left} later step(s) not run)" if left else "")
+    if last.startswith("error"):
+        with contextlib.suppress(Exception):
+            last = browser_snapshot(_ctx=_ctx)
+    return f"Steps:\n{summary}\n\n{last}"
+
+
+def _steps(lines, done, _ctx):
+    import shlex
+    last = ""
     for line in lines:
         verb, _, rest = line.partition(" ")
         verb, rest = verb.lower(), rest.strip()
@@ -917,12 +1259,7 @@ def browser_act(steps: list, _ctx=None):
             done.append(f"x {line}: {last[7:200]}")
             break
         done.append(f"ok {line}")
-    left = len(lines) - len(done)
-    summary = "\n".join(done) + (f"\n({left} later step(s) not run)" if left else "")
-    if last.startswith("error"):
-        with contextlib.suppress(Exception):
-            last = browser_snapshot(_ctx=_ctx)
-    return f"Steps:\n{summary}\n\n{last}"
+    return last
 
 
 @tool(pack="browser")

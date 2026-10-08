@@ -192,7 +192,21 @@ Keeping it controlled:
 - `browser.allow` / `browser.block` limit which sites it may open, links and redirects included.
 - `alert` dialogs are accepted. `confirm` and `prompt` dialogs are dismissed and reported to the model, so it never agrees to something on its own.
 - Popups and `target=_blank` links become the current tab. Downloads go to `~/.lotus/downloads`.
-- After an action, the page text is resent only if it changed, and long pages point the model at `browser_find`. Both keep small windows small.
+- Element numbers stay with their element for as long as the page is open, so `[12]` is the same button before and after a click.
+- After an action on the same page, the model gets what changed instead of the page again: an in-page observer watches for dialogs, alerts, menus, status messages and toasts (including ones that came and went before it looked), and the result lists new and vanished text and new, changed and removed elements. When nothing changed it says so, so the model knows a click did nothing. It falls back to the whole page after a navigation or when the change is most of the page:
+
+  ```
+  What changed since your last look:
+  dialog appeared: "Sign in to continue"
+  popup appeared and went away again: "Added to cart!"
+  new text:
+    + 1 item in your cart
+  now: [3] button Menu  (expanded)  (was collapsed)
+  new: [45] input:email Email
+  ```
+- `browser_wait` watches the page until some text appears or it stops changing, and reports what happened with timings (`+0.6s appeared: "Review 1…"`), for pages that load or stream in.
+- When the model does need to look, `browser_screenshot(target="changed")` captures only the part of the page that changed, and `target="12"` only that element: a fraction of a full screenshot's image tokens.
+- Long pages point the model at `browser_find`. All of this keeps small windows small.
 - With a visible window, the element being clicked or typed into flashes with a lotus-pink outline.
 
 Safe browsing, on by default:

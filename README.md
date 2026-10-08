@@ -71,6 +71,7 @@ git diff | lotus "write a commit message"
 - **See.** Drop a screenshot into the prompt and, if your model is text-only, lotus switches to an installed vision model for that message.
 - **Draw.** Bar, line and pie charts, sparklines, trees and tables render right in the terminal.
 - **Drive a browser like you do.** Private windows on demand, incognito by default or a profile that remembers your logins, Chromium or Firefox, and several clicks and keystrokes in one step so a small model isn't slow about it. Hit a captcha or a login? It hands you the window, you solve it, and it carries on.
+- **Watch the page, not screenshots of it.** After every click the model is told what changed: a dialog opened, an error appeared, a toast came and went, or nothing happened at all. Element numbers stay put, so a diff of a few lines replaces the whole page. When it does need to look, it screenshots only the part that changed.
 - **Split up work.** Sub-agents take tasks in parallel, each with a fresh context, and hand back only the answer.
 - **Live in a pipe or over SSH.** Pipe anything in and get clean markdown out. `/copy` reaches your own clipboard even over SSH.
 - **Zero strings attached.** No API keys, no telemetry, no dependencies, no cloud. Your laptop, your model, your data.

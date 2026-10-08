@@ -11,7 +11,7 @@ A terminal agent for [Ollama](https://ollama.com) that actually works with small
   ~~~~~~~~~~~~~~~~~~~~~~~~~~
 ```
 
-Files, shell, web and a real browser, driven by a 4–8B model on your own machine. Pure Python, no dependencies, nothing leaves your laptop.
+Files, shell, web and a real browser, driven by a small model on your own machine. Pure Python, no dependencies, nothing leaves your laptop.
 
 **Website:** https://het-joshi.github.io/lotus/ · **Docs:** [DOCS.md](DOCS.md)
 
@@ -89,13 +89,7 @@ Type `/` inside lotus for every command, and run `lotus doctor` to check your se
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=het-joshi%2Flotus&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=het-joshi/lotus&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=het-joshi/lotus&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=het-joshi/lotus&type=date&legend=top-left" />
- </picture>
-</a>
+[![Star History Chart](https://api.star-history.com/chart?repos=het-joshi/lotus&type=date&legend=top-left)](https://www.star-history.com/?repos=het-joshi%2Flotus&type=date&legend=top-left)
 
 ## License
 

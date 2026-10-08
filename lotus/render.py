@@ -517,6 +517,38 @@ class UI:
             return ans
 
 
+    def handoff(self, reason):
+        """The user takes over the browser window. True when they press Enter, False on Esc."""
+        from . import keys
+        with self.lock:
+            saved, self._status = self._status, None
+            self._erase()
+            if not self._bol:
+                self._w("\n")
+            self._w(c("  ╭─ ", "pond") + c("your turn", "pond", bold=True) + c("  in the browser window", "mist") + "\n")
+            self._w(c("  │ ", "pond") + c(trunc(reason, width() - 6), "ink") + "\n")
+            self._w(c("  ╰─ ", "pond") + c("enter", "leaf", bold=True) + c(" when you're done · ", "mist")
+                    + c("esc", "stamen", bold=True) + c(" to stop ", "mist"))
+            k = ""  # keep reading until Enter, Esc, or the turn is cancelled (None)
+            try:
+                while k not in ("enter", "esc", None):
+                    if self.watch is not None:
+                        with self.watch.paused() as fd:
+                            k = keys.read_key(fd, abort=self.cancel.is_set)
+                    elif keys.available():
+                        k = keys.ask_key(abort=self.cancel.is_set)
+                    else:
+                        input()
+                        k = "enter"
+            except (EOFError, KeyboardInterrupt):
+                k = "esc"
+            done = k == "enter"
+            self._w("\r\033[K" + c("  ╰─ ", "pond") + (c(f"{G['ok']} back to lotus", "leaf") if done else c(f"{G['stop']} stopped", "stamen")) + "\n")
+            if done:
+                self._status = saved
+            return done
+
+
 class SubUI(UI):
     """Quiet UI for sub-agents: only tool activity and renders reach the screen."""
 
@@ -562,6 +594,9 @@ class SubUI(UI):
 
     def confirm(self, question, detail=""):
         return self.parent.confirm(f"[{self.label}] {question}", detail)
+
+    def handoff(self, reason):
+        return self.parent.handoff(f"[{self.label}] {reason}")
 
 
 LOTUS_ART = [

@@ -106,7 +106,7 @@ def page_text(raw, url):
 
 @tool(pack="web")
 def fetch_url(url: str, offset: int = 0, via_tor: bool = False, _ctx=None):
-    """Read a web page as plain text. Links appear as [n] with a numbered list at the end. Use offset to read further.
+    """Read a web page as plain text (not in the browser). Links appear as [n] with a numbered list at the end. Use offset to read further.
     url: http(s) or .onion URL
     offset: character offset for long pages
     via_tor: route this request through Tor"""
@@ -127,6 +127,10 @@ def fetch_url(url: str, offset: int = 0, via_tor: bool = False, _ctx=None):
     more = f"\n[chars {offset}-{offset + len(chunk)} of {len(text)}; call again with offset={offset + len(chunk)} for more]" if offset + len(chunk) < len(text) else ""
     linkpart = "\n\nLinks:\n" + "\n".join(f"[{i + 1}] {l}" for i, l in enumerate(links[:40])) if links else ""
     warn = safety.guard_text(text)
+    if safety.is_challenge(title, text):
+        warn = (warn + "\n" if warn else "") + ("Note: this is a bot check / captcha page (sites often show these to Tor). "
+                                                "Try another page on the same site, or open it with browser_open and "
+                                                "browser_handoff so the user can solve it.")
     head = safety.UNTRUSTED + ("\n" + warn if warn else "")
     return f"# {title or url}\n{url}{' (via Tor)' if tor else ''}\n\n{head}\n{chunk}{more}{linkpart}"
 
@@ -168,18 +172,28 @@ def web_search(query: str, n: int = 6, via_tor: bool = False, _ctx=None):
     via_tor: route the search through Tor"""
     tor, proxy = _tor(_ctx, via_tor)
     sc = _ctx.cfg.get("search", {})
-    if sc.get("engine") == "searxng" or sc.get("searxng_url"):
-        results = _searx(sc["searxng_url"], query, n, tor, proxy)
-    else:
+    results, note = None, ""
+    base = sc.get("searxng_url") or ""
+    if base:
+        host = (urllib.parse.urlparse(base).hostname or "")
+        local = host.endswith((".lan", ".local", ".internal", ".home")) or host in ("localhost", "127.0.0.1")
+        if tor and local:
+            note = f"(your SearXNG at {host} can't be reached through Tor; searched DuckDuckGo over Tor instead)\n"
+        else:
+            try:
+                results = _searx(base, query, n, tor, proxy)
+            except Exception as e:
+                note = f"(your SearXNG at {host} isn't reachable: {str(e)[:80]}; searched DuckDuckGo instead)\n"
+    if results is None:
         results = _ddg(query, n, tor, proxy)
     if not results:
-        return "no results"
+        return note + "no results"
     rows = []
     for i, (t, u, snip) in enumerate(results):
         why = safety.check_url(u, _ctx.cfg) if u.startswith("http") else None
         flag = f"   WARNING: listed as {why}; don't open it\n" if why else ""
         rows.append(f"{i + 1}. {t}\n   {u}\n{flag}   {snip[:220]}")
-    return "\n".join(rows)
+    return note + ("(via Tor)\n" if tor else "") + "\n".join(rows)
 
 
 def tor_reachable(proxy):

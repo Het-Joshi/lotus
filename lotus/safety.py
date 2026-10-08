@@ -240,6 +240,20 @@ def injection(text):
     return out
 
 
+CHALLENGE = re.compile(
+    r"verification required|verify you are (a )?human|are you a robot|i'?m not a robot|just a moment\.\.\.|"
+    r"checking (if the site connection is secure|your browser)|attention required|access denied|"
+    r"enable javascript and cookies to continue|complete the (security )?check|captcha|ddos protection by|"
+    r"please wait while we verify|unusual traffic from your computer", re.I)
+
+
+def is_challenge(title, text):
+    """A bot check or captcha page (Cloudflare, hCaptcha, reCAPTCHA...) rather than real content.
+    Only short pages count, so an article that mentions captchas isn't mistaken for one."""
+    text = text or ""
+    return len(text) < 3000 and bool(CHALLENGE.search((title or "") + "\n" + text[:3000]))
+
+
 def is_executable(name):
     n = (name or "").lower()
     return any(n.endswith(ext) for ext in EXECUTABLE)

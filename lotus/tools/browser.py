@@ -35,7 +35,7 @@ from . import Interrupted, pack, tool
 from .. import safety
 from ..config import home
 
-pack("browser", "drive a real web browser: open, read, click, type, tabs, screenshot")
+pack("browser", "drive a real web browser (Tor and .onion capable): open, read, click, type, tabs, screenshot")
 
 _S = {}  # browser state; only touched on the browser thread (reads from elsewhere are harmless)
 
@@ -214,11 +214,13 @@ def _onion(url):
     return (urlparse(url).hostname or "").endswith(".onion")
 
 
-def _bc(ctx, url=None):
-    """Browser settings for one call, plus whether it must run behind Tor: /tor on, an
-    .onion address, or a session that already visited one (it stays on Tor until closed)."""
+def _bc(ctx, url=None, via_tor=False):
+    """Browser settings for one call, plus whether it must run behind Tor: /tor on, via_tor,
+    an .onion address, or a browser that is already on Tor. Once on Tor it stays on Tor until
+    it is closed, so a later click can never quietly fall back to your real address."""
     bc = dict((ctx.cfg.get("browser") or {}) if ctx is not None else {})
-    want = ctx is not None and (getattr(ctx, "tor", False) or (url and _onion(url)) or (_S.get("onion") and _S.get("tor")))
+    want = ctx is not None and (getattr(ctx, "tor", False) or via_tor or (url and _onion(url))
+                                or (_S.get("context") is not None and bool(_S.get("tor"))))
     bc["_tor"] = _proxy(ctx) if want else None
     bc["_cfg"] = ctx.cfg if ctx is not None else {}
     return bc
@@ -423,6 +425,10 @@ def _snapshot(bc, full=True):
     u = urlparse(d["url"])
     if u.scheme == "http" and not (u.hostname or "").endswith(".onion") and u.hostname not in ("localhost", "127.0.0.1"):
         events.append("this page isn't encrypted (http); don't enter anything private here")
+    if safety.is_challenge(d["title"], d["text"]):
+        events.append("this is a bot check / captcha page, which sites often show to Tor and automated browsers. "
+                      "Don't try to solve it. Try another page on the same site (e.g. a subdomain or a deeper link), "
+                      "or call browser_handoff so the user can solve it in a window")
     if events:
         out.append("\n".join("Note: " + e for e in events))
     if same and not full:
@@ -468,16 +474,17 @@ def _label(target):
 # ── tools ────────────────────────────────────────────────────────────────────
 
 @tool(pack="browser")
-def browser_open(url: str, new_tab: bool = False, _ctx=None):
-    """Open a URL and return the page text and numbered elements.
+def browser_open(url: str, new_tab: bool = False, via_tor: bool = False, _ctx=None):
+    """Open a URL in the browser and return the page text and numbered elements. For Tor set via_tor=true (.onion addresses always use Tor); never use third-party "Tor gateway" or proxy websites.
     url: address to open
-    new_tab: open in a new tab instead of the current one"""
+    new_tab: open in a new tab instead of the current one
+    via_tor: route the browser through Tor (it stays on Tor until closed)"""
     if "://" not in url and not SCHEME_RE.match(url):
         url = safety.with_scheme(url)
     scheme = urlparse(url).scheme
     if scheme not in ("http", "https") and url != "about:blank":
         return f"error: only http and https pages can be opened (not {scheme}:)"
-    bc = _bc(_ctx, url)
+    bc = _bc(_ctx, url, via_tor)
     if not _host_ok(url, bc):
         return f"error: {urlparse(url).hostname} is not allowed by the browser.allow / browser.block settings"
     if bc["_tor"]:
@@ -505,7 +512,7 @@ def browser_open(url: str, new_tab: bool = False, _ctx=None):
 
 @tool(pack="browser")
 def browser_snapshot(_ctx=None):
-    """Re-read the current page: text plus numbered interactive elements."""
+    """Re-read the browser's current page: text plus numbered interactive elements. Pages read with fetch_url are not in the browser."""
     bc = _bc(_ctx)
     return _run(lambda: _snapshot(bc))
 
@@ -722,6 +729,37 @@ def browser_screenshot(full_page: bool = False, _ctx=None):
     path = d / f"shot-{time.strftime('%Y%m%d-%H%M%S')}-{int(time.time() * 1000) % 1000:03d}.png"
     _run(lambda: _page(bc).screenshot(path=str(path), full_page=full_page))
     return f"saved {path}. " + _ctx.queue_image(str(path))
+
+
+@tool(pack="browser")
+def browser_handoff(reason: str, _ctx=None):
+    """Hand the browser to the user for something you can't or shouldn't do yourself: a captcha or bot check, logging in, two-factor codes, confirming a payment. Shows a window, waits until they're done, then returns the page.
+    reason: what the user should do, in a few words"""
+    bc = _bc(_ctx)  # keeps Tor if the browser is on Tor
+    if not sys.stdin.isatty():
+        return "error: nobody is at the keyboard to take over; tell the user what needs doing instead"
+    if _S.get("cdp") is None or _S.get("headless"):
+        if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            return "error: there's no display to show a browser window on; ask the user to open the page themselves"
+        url = None
+        if _S.get("context"):
+            with contextlib.suppress(Exception):
+                url = _run(lambda: _S["page"].url, timeout=10)
+            _run(_stop, timeout=15)
+        bc["headless"] = False
+        _ctx.cfg.setdefault("browser", {})["headless"] = False  # stay visible for the rest of the session
+
+        def reopen():
+            pg = _page(bc)
+            if url and url.startswith("http"):
+                pg.goto(url, wait_until="domcontentloaded", timeout=int(bc.get("nav_timeout", 45)) * 2000)
+            pg.bring_to_front()
+        _run(reopen, timeout=int(bc.get("nav_timeout", 45)) * 2 + 30)
+    else:
+        _run(lambda: _page(bc).bring_to_front())
+    if not _ctx.ui.handoff(reason):
+        raise Interrupted("the user stopped instead of finishing in the browser")
+    return "The user says they're done in the browser.\n\n" + _run(lambda: _snapshot(bc))
 
 
 @tool(pack="browser")

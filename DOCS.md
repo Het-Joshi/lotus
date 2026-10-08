@@ -150,7 +150,7 @@ Types: `bar`, `line`, `pie`, `spark`, `graph` (edges render as a tree), `table`.
 | core (always on) | `read_file`, `write_file`, `edit_file`, `list_dir`, `find_files`, `grep`, `shell`, `todo`, `remember`, `recall`, `page_output`, `load_tools`, `view_image` |
 | render | `show_chart`, `show_table` |
 | web | `web_search` (DuckDuckGo, or your SearXNG), `fetch_url` (page as text with numbered links) |
-| browser | `browser_open`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_press`, `browser_select`, `browser_scroll`, `browser_find`, `browser_wait`, `browser_back`, `browser_tabs`, `browser_screenshot`, `browser_close` |
+| browser | `browser_open`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_press`, `browser_select`, `browser_scroll`, `browser_find`, `browser_wait`, `browser_back`, `browser_tabs`, `browser_handoff`, `browser_screenshot`, `browser_close` |
 | system | `open_path`, `launch_app`, `list_apps`, `clipboard_get`, `clipboard_set`, `notify`, `system_info` |
 | agents | `delegate` (parallel sub-agents with fresh context) |
 
@@ -182,7 +182,9 @@ Safe browsing, on by default:
 - Programs and scripts (`.exe`, `.dmg`, `.sh`, `.apk`, macro documents, …) are never downloaded unless `safe_browsing.allow_executables` is on.
 - Only `http` and `https` pages open (no `file:`, `javascript:` or `data:`), and unencrypted `http` pages carry a warning.
 
-Tor: with `/tor on` (or `--tor`) the browser runs behind Tor as well, not only the web tools. Any `.onion` address switches it to Tor by itself, and it stays on Tor until closed. Names are resolved inside Tor, WebRTC can't reveal your address, QUIC is off, and the locale and time zone are generic. Switching Tor on or off restarts the browser, and the snapshot says `(via Tor)`. Your own Chrome (`browser.cdp_url`) can't be put behind Tor from lotus.
+Tor: with `/tor on` (or `--tor`) the browser runs behind Tor as well, not only the web tools. The model can also ask for it per page (`browser_open(url, via_tor=true)`, for when you say "over Tor"), and any `.onion` address switches it to Tor by itself. Once the browser is on Tor it stays on Tor until it's closed, so a later click can't fall back to your real address. Names are resolved inside Tor, WebRTC can't reveal your address, QUIC is off, and the locale and time zone are generic. Switching Tor on or off restarts the browser, and the snapshot says `(via Tor)`. Your own Chrome (`browser.cdp_url`) can't be put behind Tor from lotus.
+
+Captchas and logins: pages that are really a bot check ("Just a moment…", "Verification required", reCAPTCHA) are recognised, and the model is told not to try solving them. Sites often show these to Tor exits, and another page on the same site (`boards.4chan.org` instead of `4chan.org`) frequently works. When it doesn't, `browser_handoff` brings up a visible window (switching from headless if needed, Tor kept), you solve the captcha or log in, press Enter, and lotus carries on from there. `Esc` stops instead.
 
 `/browser` shows the open tabs, `/browser close` closes it, and `/browser show` / `/browser hide` switch between a window and headless. Set `browser.cdp_url` to `http://localhost:9222` to drive your own Chrome (start it with `--remote-debugging-port=9222`).
 
@@ -273,7 +275,7 @@ Load with `/tools mcp:fs`, or let the model call `load_tools("mcp:fs")`. Tools f
 | `tool_mode` | auto | `native`, `text`, or `auto` (native when the model reports the tools capability). |
 | `tool_output_share` | 0.2 | Largest share of the window one tool result may take before it is paged. |
 | `vision_model` | "" | Model used for images when the current one can't see. Empty means pick an installed one. |
-| `search.searxng_url` | "" | Use your SearXNG instance instead of DuckDuckGo. |
+| `search.searxng_url` | "" | Use your SearXNG instance instead of DuckDuckGo. If it can't be reached (say you're away from home and it's on `.lan`), or Tor is on and it's a local address, search falls back to DuckDuckGo and says so. |
 | `shell` | "" | e.g. `powershell` or `/bin/zsh`. |
 | `think_budget` | auto | Tokens of reasoning per step before it's cut short. `auto` is 8000, or 2000 / 6000 / 16000 with `/think low|medium|high`. `0` turns the limit off. |
 | `repeat_penalty` | null | For example `1.1` if a model keeps repeating itself. `null` keeps the model's default. |

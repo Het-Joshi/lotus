@@ -29,7 +29,8 @@ Lotus is designed around those constraints:
 | Problem | What lotus does |
 |---|---|
 | Silent truncation | Reads each model's true context length from `/api/show`, estimates every prompt, and requests a `num_ctx` step that fits. It only grows within a session, because every change forces Ollama to reload the model. It warns if a prompt still fills the window. |
-| Prompt bloat | A ~250-token system prompt. Tools come in packs (`web`, `browser`, `system`, `agents`, MCP servers, plugins); only the active ones are sent, and the model can call `load_tools("web")` when it needs more. `/context` shows exactly what is using the window. |
+| Prompt bloat | A system prompt of a few hundred tokens. Tools come in packs (`web`, `browser`, `system`, `agents`, MCP servers, plugins); only the active ones are sent, and the model can call `load_tools("web")` when it needs more. `/context` shows exactly what is using the window. |
+| Wrong tool on step one | A router turns on the packs a request needs before the model sees it. Rules come first ("price", "near me", a URL → `web`; "log in", "fill out" → `browser`; "papers", "arXiv" → `research`). If none match, one short call to the same model picks packs with Ollama's `format` set to a JSON schema, so the answer can only be real pack names (about a second when the model is warm). Shell refuses to launch a GUI browser and points at the right tool instead. |
 | Tool calling | Native `/api/chat` tool calls when the model supports them; otherwise a compact text protocol. In both modes, calls written as text (`<tool_call>`, `<tool>`, fenced JSON) are rescued, broken JSON is repaired, and wrong argument names are mapped (`{"cmd": "ls"}` → `shell(command=)`). Unknown tools get a "did you mean". |
 | Context rot | See [Staying on task](#staying-on-task-context-rot): output paging, observation masking, stale-read retirement, a plan and pins that sit at the end of the window, repeat-call detection, structured compaction, and sub-agents with a fresh context. |
 
@@ -316,6 +317,7 @@ Load with `/tools mcp:fs`, or let the model call `load_tools("mcp:fs")`. Tools f
 | `ctx_max` | 32768 | Largest `num_ctx` lotus will request. Lower it on 8 GB machines, raise it for long agent runs. |
 | `ctx_min` | 4096 | Smallest `num_ctx`. |
 | `packs` | core, render, web | Packs active at start. Web is on so current-information questions go straight to search. |
+| `router` | auto | Pick packs per request: `auto` (rules, then a short constrained model call), `rules` (rules only, no extra call), or `off`. |
 | `max_steps` | 25 | Tool steps per turn (sub-agents: `subagents.max_steps`, 12). |
 | `tool_mode` | auto | `native`, `text`, or `auto` (native when the model reports the tools capability). |
 | `tool_output_share` | 0.2 | Largest share of the window one tool result may take before it is paged. |

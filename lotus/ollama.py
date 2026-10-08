@@ -91,10 +91,12 @@ class Ollama:
         self._info[model] = info
         return info
 
-    def chat(self, model, messages, tools=None, options=None, think=None, stream=True, keep_alive=None):
+    def chat(self, model, messages, tools=None, options=None, think=None, stream=True, keep_alive=None, fmt=None):
         p = {"model": model, "messages": messages, "stream": stream}
         if tools:
             p["tools"] = tools
+        if fmt:
+            p["format"] = fmt  # "json" or a JSON schema the reply is constrained to
         if options:
             p["options"] = options
         if think is not None:

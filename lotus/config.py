@@ -14,6 +14,7 @@ DEFAULTS = {
     "theme": "auto",              # auto (follow the terminal background) | dark | light
     "tool_mode": "auto",          # auto | native | text
     "packs": ["core", "render", "web"],  # tool packs active at start; others load on demand
+    "router": "auto",             # pick packs per request: auto (rules, then a short constrained model call) | rules | off
     "ctx_max": 32768,             # never ask Ollama for more than this (protects RAM/VRAM)
     "ctx_min": 4096,
     "reserve_tokens": 2048,       # room kept free for the reply

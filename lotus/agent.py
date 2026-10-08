@@ -23,13 +23,14 @@ import time
 from pathlib import Path
 
 from . import memory
+from . import router
 from . import tools as T
 from .config import home
 from .context import Context
 from .ollama import OllamaError
 from .render import StreamRenderer, SubUI
 from .textcalls import TEXT_PROTOCOL, LoopGuard, Splitter, extract_calls
-from .theme import ASCII, COMPACT_WORD, G, c
+from .theme import ASCII, COMPACT_WORD, G, ROUTE_WORD, c
 
 MASKED = "…[old tool output trimmed to save context; run the tool again if you need it]"
 BASE = """You are Lotus, a capable assistant running locally through Ollama on the user's computer.
@@ -364,6 +365,7 @@ class Agent:
 
     # ── a full turn ──────────────────────────────────────────────────────────
     def turn(self, text, images=None):
+        self._route(text)
         if self.notes:
             text = "\n\n".join(self.notes) + "\n\n" + text
             self.notes = []
@@ -371,6 +373,20 @@ class Agent:
         if images:
             msg["images"] = [self._b64(p) for p in images]
         return self._run(msg)
+
+    def _route(self, text):
+        """Turn on the packs this request needs before the model sees it (see router.py)."""
+        if not self.depth:
+            self.ui.status(*ROUTE_WORD)
+        try:
+            packs, how = router.route(self, text)
+        finally:
+            if not self.depth:
+                self.ui.status(None)
+        if packs:
+            self.active.update(packs)
+            if not self.depth:
+                self.ui.info(f"{G['sub']} tools: {', '.join(packs)} ({how})")
 
     def _run(self, msg):
         self._rem_dirty = True

@@ -258,6 +258,7 @@ WAIT_WORDS = [("manana", "pondering"), ("vichāra", "reflecting"), ("chintana", 
               ("bodha", "understanding"), ("smaraṇa", "recalling")]
 THINK_WORD = ("dhyāna", "reasoning")
 COMPACT_WORD = ("saṅgraha", "compacting")
+ROUTE_WORD = ("viveka", "choosing tools")
 
 
 def plain_word(s):

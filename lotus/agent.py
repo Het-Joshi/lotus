@@ -239,6 +239,7 @@ class Agent:
                     stream.close()
         if out["loop"] != "think":
             show(split.flush())
+        out["thought"] = g_think.total
         self.ui.think_end()
         return out
 
@@ -266,7 +267,18 @@ class Agent:
 
         rend = None if (self.quiet or self.ui.plain) else StreamRenderer(self.ui)
         think = self._think_param()
-        r = self._stream(msgs, tools, opts, think, rend)
+        try:
+            r = self._stream(msgs, tools, opts, think, rend)
+        except OllamaError as e:
+            if "tool call" not in str(e):
+                raise
+            # Ollama refuses a tool call it can't parse (cut-off JSON, say) and ends the reply.
+            # Small models usually get it right when asked again.
+            self.ui.warn("the model wrote a broken tool call; asking it to try again")
+            nudge = ("\n\n(Your last tool call had broken arguments and was rejected. Make it again with "
+                     "complete, valid JSON arguments, or answer directly.)")
+            retry = msgs[:-1] + [dict(msgs[-1], content=(msgs[-1].get("content") or "") + nudge)]
+            r = self._stream(retry, tools, opts, think, rend)
         if r["loop"] == "think" and not r["interrupted"]:
             # Reasoning went round in circles (or ran past its budget). Ask once more, without
             # reasoning where the model allows it, and with a nudge to answer now.
@@ -278,6 +290,12 @@ class Agent:
                 self.ui.warn(f"its reasoning {r['why']} again; stopping this step")
         elif r["loop"] == "text":
             self.ui.warn(f"the reply {r['why']}; cut it off there")
+        elif not r["interrupted"] and not r["calls"] and r["thought"] and not r["split"].stored().strip():
+            # Some fine-tunes write their whole answer as reasoning and leave the reply empty.
+            self.ui.warn("it answered only in its reasoning; asking for the reply")
+            nudge = "\n\n(Now write your reply to the user, or make the next tool call.)"
+            retry = msgs[:-1] + [dict(msgs[-1], content=(msgs[-1].get("content") or "") + nudge)]
+            r = self._stream(retry, tools, opts, False if "thinking" in self.caps else think, rend, budget_scale=0.5)
         if rend:
             rend.close()
         self.ui.think_end()

@@ -704,14 +704,14 @@ def _text_diff(old, new):
     return [x for x in add if x not in moved], [x for x in rem if x not in moved]
 
 
-def _capped(prefix, lines, budget):
+def _capped(lines, budget):
     out, used = [], 0
     for i, ln in enumerate(lines):
         ln = _clip(ln, 200)
         if used + len(ln) > budget and out:
             out.append(f"  …and {len(lines) - i} more line(s)")
             break
-        out.append(f"  {prefix} {ln}")
+        out.append(f"  {ln}")
         used += len(ln)
     return out
 
@@ -727,10 +727,10 @@ def _changes(base, view, d, events, timed):
     budget = int(base.get("chars", 4000)) // 3
     if add:
         out.append("new text:")
-        out += _capped("+", add, budget)
+        out += _capped(add, budget)
     if rem:
         out.append("text gone:")
-        out += _capped("-", rem, budget // 2)
+        out += _capped(rem, budget // 2)
     old, now, alive = base["items"], view["items"], set(d["alive"])
     new = [n for n in now if n not in old and n > base["top"]]
     into = [n for n in now if n not in old and n <= base["top"]]
@@ -1056,6 +1056,8 @@ def browser_wait(text: str = "", seconds: int = 5, _ctx=None):
     text: text to wait for; empty waits until the page settles
     seconds: longest wait"""
     bc = _bc(_ctx)
+    if str(text).strip().isdigit():  # browser_wait("3") from a small model means seconds
+        text, seconds = "", int(str(text).strip())
     seconds = max(1, min(int(seconds), 30))
 
     def job():

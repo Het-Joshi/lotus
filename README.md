@@ -118,7 +118,7 @@ Each project keeps its own license. CloakBrowser's browser binary has its own te
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/chart?repos=het-joshi/lotus&type=date&legend=top-left)](https://www.star-history.com/?repos=het-joshi%2Flotus&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/chart?repos=het-joshi/lotus&type=date&legend=bottom-right)](https://www.star-history.com/?repos=het-joshi%2Flotus&type=date&legend=bottom-right)
 
 ## License
 
